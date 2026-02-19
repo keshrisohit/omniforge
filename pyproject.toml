@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omniforge"
+version = "0.1.0"
+description = "A powerful Python toolkit for data processing and transformation"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "pydantic>=2.0.0",
+    "jinja2>=3.1.0",
+    "cachetools>=5.0.0",
+    "jsonschema>=4.0.0",
+    "litellm>=1.50.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.19.0",
+    "greenlet>=3.0.0",
+    "httpx>=0.24.0",
+    "aiolimiter>=1.1.0",
+    "python-dotenv>=1.0.0",
+    "cryptography>=41.0.0",
+    "click>=8.0.0",
+    "rich>=13.0.0",
+    "croniter>=2.0.0",
+    "apscheduler>=3.10.0",
+    "prometheus-client>=0.19.0",
+    "structlog>=24.1.0",
+    "pyyaml>=6.0.0",
+    "mcp>=1.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-timeout>=2.2.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "types-cachetools>=5.0.0",
+    "types-jsonschema>=4.0.0",
+    "types-sqlalchemy>=1.4.0",
+    "types-PyYAML>=6.0.0",
+    "responses>=0.24.0",
+    "testcontainers>=3.7.0",
+]
+tracing = [
+    "opik>=0.1.0",
+]
+
+[project.scripts]
+omniforge = "omniforge.cli.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=omniforge --cov-report=term-missing"
+asyncio_mode = "auto"
+
+[tool.black]
+line-length = 100
+target-version = ['py39']
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+select = ["E", "F", "I", "N", "W"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

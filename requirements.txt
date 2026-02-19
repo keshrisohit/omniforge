@@ -1,0 +1,32 @@
+# OmniForge Production Dependencies
+# Python 3.9+
+
+# Web Framework
+fastapi>=0.100.0
+uvicorn>=0.23.0
+
+# Data Validation & Models
+pydantic>=2.0.0
+
+# Template Engine
+jinja2>=3.1.0
+
+# Caching & Utilities
+cachetools>=5.0.0
+
+# JSON Schema Validation
+jsonschema>=4.0.0
+
+# LLM Integration
+litellm>=1.50.0
+
+# Database & ORM
+sqlalchemy>=2.0.0
+aiosqlite>=0.19.0
+greenlet>=3.0.0
+
+# HTTP Client
+httpx>=0.24.0
+
+# Rate Limiting
+aiolimiter>=1.1.0

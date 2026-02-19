@@ -1,0 +1,34 @@
+# OmniForge Autonomous Skill Execution Configuration
+#
+# This file defines platform-level defaults for autonomous skill execution.
+# Skills can override these defaults in their metadata.
+
+autonomous:
+  # Default execution settings
+  default_max_iterations: 15
+  default_max_retries_per_tool: 3
+  default_timeout_per_iteration_ms: 30000
+  enable_error_recovery: true
+  default_model: "claude-sonnet-4"
+
+  # Visibility defaults by role
+  # Options: SUMMARY, FULL, NONE
+  visibility_end_user: SUMMARY
+  visibility_developer: FULL
+  visibility_admin: FULL
+
+  # Cost management (optional)
+  cost_limits_enabled: false
+  max_cost_per_execution_usd: 1.0
+
+  # Rate limiting (optional)
+  rate_limits_enabled: false
+  max_iterations_per_minute: 100
+
+  # Script execution settings (for TASK-007)
+  # Note: These are future configurations and not yet implemented
+  # script_execution:
+  #   sandbox_mode: docker  # or "subprocess" for dev
+  #   timeout_seconds: 30
+  #   max_memory_mb: 512
+  #   allow_network: false

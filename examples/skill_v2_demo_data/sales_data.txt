@@ -1,0 +1,35 @@
+# Q1 2024 Sales Report
+
+## Overview
+Strong performance across all regions in Q1 2024.
+
+## Key Metrics
+- Total Revenue: $2,500,000
+- Units Sold: 10,000
+- Average Order Value: $250
+- Customer Growth: 15%
+
+## Regional Performance
+- North: $800,000 (32%)
+- South: $650,000 (26%)
+- East: $600,000 (24%)
+- West: $450,000 (18%)
+
+## Top Products
+1. Product A: $900,000
+2. Product B: $700,000
+3. Product C: $500,000
+
+## Highlights
+- Successfully launched new product line
+- Improved conversion rate by 25%
+- Reduced customer churn by 10%
+
+## Challenges
+- Supply chain delays in West region
+- Increased competition in South region
+
+## Recommendations
+- Expand Product A inventory
+- Focus marketing efforts in West region
+- Optimize supply chain logistics

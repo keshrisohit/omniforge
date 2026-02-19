@@ -1,0 +1,36 @@
+```json
+{
+  # General Settings
+  "skillName": "LinkedIn Post Summarizer",
+  "version": "1.0",
+  "description": "A skill to summarize LinkedIn posts",
+
+  # Input Settings
+  "inputType": "text",  # Options: text, url
+  "inputSource": "user",  # Options: user, api
+  "maxInputLength": 10000,  # Maximum length of input text
+
+  # LinkedIn API Settings
+  "linkedinApiKey": "",  # Your LinkedIn API key
+  "linkedinApiSecret": "",  # Your LinkedIn API secret
+  "linkedinAccessToken": "",  # Your LinkedIn access token
+  "linkedinApiUrl": "https://api.linkedin.com/v2/",  # LinkedIn API URL
+
+  # Summarization Settings
+  "summarizationModel": "transformer",  # Options: transformer, lstm
+  "summarizationRatio": 0.2,  # Ratio of summary length to input length
+  "maxSummaryLength": 500,  # Maximum length of summary
+
+  # Script Settings
+  "scriptPath": "{baseDir}/scripts/main.py",  # Path to the main script
+  "scriptTimeout": 30000,  # Timeout for script execution in milliseconds
+
+  # Logging Settings
+  "logLevel": "INFO",  # Options: DEBUG, INFO, WARNING, ERROR
+  "logPath": "{baseDir}/logs",  # Path to log files
+
+  # Error Handling Settings
+  "errorRetryCount": 3,  # Number of times to retry on error
+  "errorTimeout": 5000,  # Timeout between retries in milliseconds
+}
+```

@@ -1,0 +1,22 @@
+# OmniForge Development Dependencies
+# Includes all production dependencies plus development tools
+
+# Include production dependencies
+-r requirements.txt
+
+# Testing Framework
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-asyncio>=0.21.0
+
+# Code Formatting
+black>=23.0.0
+
+# Linting
+ruff>=0.1.0
+
+# Type Checking
+mypy>=1.0.0
+types-cachetools>=5.0.0
+types-jsonschema>=4.0.0
+types-sqlalchemy>=1.4.0

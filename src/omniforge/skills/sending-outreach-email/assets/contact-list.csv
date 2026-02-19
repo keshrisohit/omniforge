@@ -1,0 +1,19 @@
+Here's a template for a contact-list.csv file:
+
+```csv
+First Name,Last Name,Email Address,Company,Job Title,Phone Number,City,Country
+John,Doe,john.doe@example.com,Example Inc.,Software Engineer,+1234567890,New York,USA
+Jane,Smith,jane.smith@example.com,Example Corp.,Marketing Manager,+0987654321,Los Angeles,USA
+```
+
+This template includes the following columns:
+1. First Name
+2. Last Name
+3. Email Address
+4. Company
+5. Job Title
+6. Phone Number
+7. City
+8. Country
+
+You can add more rows with contact information as needed. The first row contains the column headers, and each subsequent row represents a contact's information.
