@@ -7,14 +7,14 @@ enabling hierarchical agent orchestration with full reasoning chain visibility.
 import asyncio
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 from omniforge.agents.errors import AgentNotFoundError
 from omniforge.agents.events import (
+    TaskArtifactEvent,
     TaskDoneEvent,
     TaskErrorEvent,
-    TaskEvent,
     TaskMessageEvent,
 )
 from omniforge.agents.models import TextPart
@@ -171,8 +171,10 @@ class SubAgentTool(BaseTool):
                 ],
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
-                user_id=context.correlation_id,  # Use correlation_id as user
+                tenant_id=context.tenant_id,
+                user_id=context.user_id or "system",
                 parent_task_id=context.task_id,
+                conversation_id=context.conversation_id,
             )
 
             # Process task with timeout
@@ -194,15 +196,19 @@ class SubAgentTool(BaseTool):
             duration_ms = int((time.time() - start_time) * 1000)
             return ToolResult(
                 success=False,
-                error=f"Agent not found: {agent_id}",
+                error=f"Agent '{agent_id}' not found. Use list_agents to see available agents.",
                 duration_ms=duration_ms,
             )
 
         except asyncio.TimeoutError:
+            timeout_secs = self._timeout_ms // 1000
             duration_ms = int((time.time() - start_time) * 1000)
             return ToolResult(
                 success=False,
-                error=f"Sub-agent execution timed out after {self._timeout_ms}ms",
+                error=(
+                    f"Agent '{agent_id}' timed out after {timeout_secs}s. "
+                    "The task may still be running in the background."
+                ),
                 duration_ms=duration_ms,
             )
 
@@ -210,7 +216,7 @@ class SubAgentTool(BaseTool):
             duration_ms = int((time.time() - start_time) * 1000)
             return ToolResult(
                 success=False,
-                error=f"Sub-agent execution failed: {str(e)}",
+                error=f"Agent '{agent_id}' failed: {str(e)}",
                 duration_ms=duration_ms,
             )
 
@@ -239,10 +245,23 @@ class SubAgentTool(BaseTool):
         # Process task events from agent
         async for event in agent.process_task(task):
             if isinstance(event, TaskMessageEvent):
-                # Collect message parts
+                # Collect all message parts — text, data, and file references
                 for part in event.message_parts:
-                    if hasattr(part, "text"):
-                        messages.append(part.text)
+                    if hasattr(part, "text") and part.text:  # type: ignore[union-attr]
+                        messages.append(part.text)  # type: ignore[union-attr]
+                    elif hasattr(part, "data") and part.data is not None:  # type: ignore[union-attr]
+                        import json as _json
+
+                        try:
+                            messages.append(f"[Data: {_json.dumps(part.data)}]")  # type: ignore[union-attr]
+                        except Exception:
+                            messages.append(f"[Data: {str(part.data)}]")  # type: ignore[union-attr]
+                    elif hasattr(part, "file_id"):  # type: ignore[union-attr]
+                        messages.append(f"[File: {part.file_id}]")  # type: ignore[union-attr]
+
+            elif isinstance(event, TaskArtifactEvent):
+                # Collect artifacts produced by sub-agent (files, data outputs)
+                artifacts.append(event.artifact.model_dump())
 
             elif isinstance(event, TaskDoneEvent):
                 final_state = event.final_state
@@ -254,13 +273,19 @@ class SubAgentTool(BaseTool):
                     "message": event.error_message,
                     "details": event.details,
                 }
-                # Continue to wait for done event
+                # Continue consuming events until done event arrives
+
+        # Guard: sub-agent never sent a terminal event
+        if final_state is None:
+            raise Exception(
+                f"Agent '{task.agent_id}' ended without sending a completion signal."
+            )
 
         # Build result
         result = {
             "sub_chain_id": sub_chain_id,
             "agent_id": task.agent_id,
-            "final_state": final_state.value if final_state else "unknown",
+            "final_state": final_state.value,
             "messages": messages,
             "context": context,
         }
@@ -271,8 +296,12 @@ class SubAgentTool(BaseTool):
         if artifacts:
             result["artifacts"] = artifacts
 
-        # If task failed, include error in the result
-        if final_state == TaskState.FAILED and error_info:
-            raise Exception(f"Sub-agent failed: {error_info['message']}")
+        # Raise on failure so the ReAct loop treats it as an error observation
+        if final_state == TaskState.FAILED:
+            if error_info:
+                error_detail = f"[{error_info['code']}] {error_info['message']}"
+            else:
+                error_detail = "no error details provided"
+            raise Exception(f"Agent '{task.agent_id}' failed: {error_detail}")
 
         return result

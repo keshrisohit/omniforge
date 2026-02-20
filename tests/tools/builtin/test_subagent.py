@@ -10,6 +10,7 @@ import pytest
 from omniforge.agents.base import BaseAgent
 from omniforge.agents.errors import AgentNotFoundError
 from omniforge.agents.events import (
+    TaskArtifactEvent,
     TaskDoneEvent,
     TaskErrorEvent,
     TaskEvent,
@@ -20,6 +21,7 @@ from omniforge.agents.models import (
     AgentCapabilities,
     AgentIdentity,
     AgentSkill,
+    Artifact,
     SkillInputMode,
     SkillOutputMode,
     TextPart,
@@ -463,3 +465,146 @@ async def test_subagent_tool_multiple_messages(agent_registry, tool_context):
     assert "Message 1" in result.result["messages"]
     assert "Message 2" in result.result["messages"]
     assert "Message 3" in result.result["messages"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_tool_collects_artifacts(agent_registry, tool_context):
+    """Artifacts emitted by sub-agent are collected and returned in result."""
+
+    class ArtifactAgent(BaseAgent):
+        identity = AgentIdentity(
+            id="artifact-agent",
+            name="Artifact Agent",
+            description="Agent that produces artifacts",
+            version="1.0.0",
+        )
+        capabilities = AgentCapabilities()
+        skills = [
+            AgentSkill(
+                id="artifact-skill",
+                name="Artifact",
+                description="Produces an artifact",
+                input_modes=[SkillInputMode.TEXT],
+                output_modes=[SkillOutputMode.TEXT],
+            )
+        ]
+
+        async def process_task(self, task: Task) -> AsyncIterator[TaskEvent]:
+            yield TaskArtifactEvent(
+                task_id=task.id,
+                timestamp=datetime.now(timezone.utc),
+                artifact=Artifact(
+                    id="artifact-1",
+                    type="document",
+                    title="Result doc",
+                    content="Some content here",
+                ),
+            )
+            yield TaskMessageEvent(
+                task_id=task.id,
+                timestamp=datetime.now(timezone.utc),
+                message_parts=[TextPart(text="Done")],
+            )
+            yield TaskDoneEvent(
+                task_id=task.id,
+                timestamp=datetime.now(timezone.utc),
+                final_state=TaskState.COMPLETED,
+            )
+
+    agent = ArtifactAgent()
+    await agent_registry.register(agent)
+
+    tool = SubAgentTool(agent_registry=agent_registry)
+    result = await tool.execute(
+        arguments={"agent_id": "artifact-agent", "task_description": "Produce artifact"},
+        context=tool_context,
+    )
+
+    assert result.success is True
+    assert "artifacts" in result.result
+    assert len(result.result["artifacts"]) == 1
+    assert result.result["artifacts"][0]["id"] == "artifact-1"
+    assert result.result["artifacts"][0]["type"] == "document"
+
+
+@pytest.mark.asyncio
+async def test_subagent_not_found_error_names_agent(agent_registry, tool_context):
+    """Agent-not-found error message must include the requested agent_id."""
+    tool = SubAgentTool(agent_registry=agent_registry)
+
+    result = await tool.execute(
+        arguments={"agent_id": "missing-xyz-agent", "task_description": "Do work"},
+        context=tool_context,
+    )
+
+    assert result.success is False
+    assert "missing-xyz-agent" in result.error
+
+
+@pytest.mark.asyncio
+async def test_subagent_timeout_error_names_agent(agent_registry, tool_context):
+    """Timeout error message must include the agent_id and duration."""
+    slow_agent = SlowMockAgent()
+    await agent_registry.register(slow_agent)
+
+    tool = SubAgentTool(agent_registry=agent_registry, timeout_ms=500)
+    result = await tool.execute(
+        arguments={"agent_id": "slow-agent", "task_description": "Do slow work"},
+        context=tool_context,
+    )
+
+    assert result.success is False
+    assert "slow-agent" in result.error
+    assert "timed out" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_subagent_failure_includes_error_code(agent_registry, tool_context):
+    """When sub-agent fails with a TaskErrorEvent, error code must appear in the ToolResult."""
+    failing_agent = MockSubAgent(should_fail=True)
+    await agent_registry.register(failing_agent)
+
+    tool = SubAgentTool(agent_registry=agent_registry)
+    result = await tool.execute(
+        arguments={"agent_id": "mock-sub-agent", "task_description": "Do work"},
+        context=tool_context,
+    )
+
+    assert result.success is False
+    # Error from MockSubAgent uses code "TEST_ERROR" and message "Test error occurred"
+    assert "TEST_ERROR" in result.error or "Test error occurred" in result.error
+
+
+@pytest.mark.asyncio
+async def test_subagent_no_done_event_raises_error(agent_registry, tool_context):
+    """Sub-agent that never sends a terminal event results in ToolResult failure."""
+
+    class NoDoneAgent(BaseAgent):
+        identity = AgentIdentity(
+            id="no-done-agent",
+            name="No Done Agent",
+            description="Agent that never sends done",
+            version="1.0.0",
+        )
+        capabilities = AgentCapabilities()
+        skills = []
+
+        async def process_task(self, task: Task) -> AsyncIterator[TaskEvent]:
+            yield TaskStatusEvent(
+                task_id=task.id,
+                timestamp=datetime.now(timezone.utc),
+                state=TaskState.WORKING,
+            )
+            # No TaskDoneEvent emitted
+
+    agent = NoDoneAgent()
+    await agent_registry.register(agent)
+
+    tool = SubAgentTool(agent_registry=agent_registry)
+    result = await tool.execute(
+        arguments={"agent_id": "no-done-agent", "task_description": "Do work"},
+        context=tool_context,
+    )
+
+    assert result.success is False
+    assert "completion signal" in result.error or "no-done-agent" in result.error

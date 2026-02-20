@@ -16,7 +16,13 @@ from typing import Any, AsyncIterator, Optional
 from uuid import uuid4
 
 from omniforge.agents.autonomous_simple import SimpleAutonomousAgent
-from omniforge.agents.events import TaskDoneEvent, TaskEvent, TaskMessageEvent, TaskStatusEvent
+from omniforge.agents.events import (
+    TaskDoneEvent,
+    TaskErrorEvent,
+    TaskEvent,
+    TaskMessageEvent,
+    TaskStatusEvent,
+)
 from omniforge.agents.helpers import get_latest_user_message
 from omniforge.agents.models import (
     AgentCapabilities,
@@ -164,6 +170,8 @@ and can be used for any automation task.
         """
         # Delegation state — set before tool registration so callback is valid
         self._delegated_agent: Optional[Any] = None
+        # Failure context from the last delegation — injected into the next ReAct turn
+        self._last_delegation_error: Optional[str] = None
 
         # Build registry: default tools (includes llm) + platform tools
         from omniforge.llm.config import load_config_from_env
@@ -249,32 +257,106 @@ and can be used for any automation task.
 
         # ── Forward to delegated agent ────────────────────────────────────
         if self._delegated_agent is not None:
+            delegated_id = (
+                self._delegated_agent.identity.id
+                if hasattr(self._delegated_agent, "identity")
+                else "agent"
+            )
+            now = datetime.utcnow()
+            yield TaskStatusEvent(
+                task_id=task.id,
+                timestamp=now,
+                state=TaskState.WORKING,
+                message=f"Delegating to '{delegated_id}'...",
+            )
             subtask = self._make_subtask(task)
+            last_error_message: Optional[str] = None
             async for event in self._delegated_agent.process_task(subtask):
                 # Remap task_id to parent task so caller sees consistent IDs
                 if hasattr(event, "task_id"):
                     object.__setattr__(event, "task_id", task.id)
-                # Auto-clear delegation when sub-agent completes
-                if isinstance(event, TaskDoneEvent) and event.final_state == TaskState.COMPLETED:
+
+                # Capture error reason so we can surface it if the task fails
+                if isinstance(event, TaskErrorEvent):
+                    last_error_message = event.error_message
+
+                # Auto-clear delegation when sub-agent finishes (any terminal state)
+                if isinstance(event, TaskDoneEvent) and event.final_state in (
+                    TaskState.COMPLETED,
+                    TaskState.FAILED,
+                    TaskState.CANCELLED,
+                ):
                     self._delegated_agent = None
+                    # On non-success, emit a visible error message and persist it
+                    # so the next ReAct turn has full context to course-correct
+                    if event.final_state != TaskState.COMPLETED:
+                        agent_id = subtask.agent_id
+                        reason = last_error_message or f"task ended with state: {event.final_state.value}"
+                        error_text = (
+                            f"[Delegation to '{agent_id}' ended with {event.final_state.value}. "
+                            f"Reason: {reason}]"
+                        )
+                        self._last_delegation_error = error_text
+                        now = datetime.utcnow()
+                        yield TaskMessageEvent(
+                            task_id=task.id,
+                            timestamp=now,
+                            message_parts=[TextPart(text=error_text)],
+                            is_partial=False,
+                        )
+
                 yield event
             return
 
         # ── Normal ReAct loop ─────────────────────────────────────────────
+        # Inject prior delegation failure into the task history so the LLM
+        # can reason about what went wrong and course-correct
+        if self._last_delegation_error is not None:
+            error_context = self._last_delegation_error
+            self._last_delegation_error = None
+            task = self._inject_context_message(task, error_context)
+
         async for event in super().process_task(task):
             yield event
+
+    def _inject_context_message(self, task: Task, context_text: str) -> Task:
+        """Return a copy of *task* with an assistant context message prepended.
+
+        This is used to surface delegation failure details to the LLM on the
+        next ReAct turn so it can course-correct without relying on the client
+        to relay the failure back via conversation_history.
+
+        Args:
+            task: The incoming task
+            context_text: Context string to prepend as an agent (assistant) message
+
+        Returns:
+            New Task with the context message inserted before the last user message
+        """
+        now = datetime.utcnow()
+        context_msg = TaskMessage(
+            id=str(uuid4()),
+            role="agent",
+            parts=[TextPart(text=context_text)],
+            created_at=now,
+        )
+        # Insert just before the final user message so the LLM sees:
+        # [history...] [error context] [current user message]
+        new_messages = list(task.messages[:-1]) + [context_msg] + list(task.messages[-1:])
+        return task.model_copy(update={"messages": new_messages})
 
     def _make_subtask(self, parent_task: Task) -> Task:
         """Create a sub-task for the delegated agent from the parent task.
 
-        Only the latest user message is forwarded; the delegated agent
-        manages its own session history internally.
+        Includes up to 5 prior messages from the parent task as context,
+        plus the latest user message. Inherits conversation_id so the
+        sub-agent can use the same HITL session key.
 
         Args:
             parent_task: The parent task from MasterAgent
 
         Returns:
-            A new Task with parent_task_id set
+            A new Task with parent_task_id and conversation_id set
         """
         now = datetime.utcnow()
         user_message = get_latest_user_message(parent_task)
@@ -283,21 +365,25 @@ and can be used for any automation task.
             if self._delegated_agent is not None
             else "unknown"
         )
+        # Include up to 5 prior messages for context (all except the last user message)
+        prior_messages = list(parent_task.messages[:-1])[-5:]
+        messages = prior_messages + [
+            TaskMessage(
+                id=str(uuid4()),
+                role="user",
+                parts=[TextPart(text=user_message)],
+                created_at=now,
+            )
+        ]
         return Task(
             id=str(uuid4()),
             agent_id=agent_id,
             state=TaskState.SUBMITTED,
-            messages=[
-                TaskMessage(
-                    id=str(uuid4()),
-                    role="user",
-                    parts=[TextPart(text=user_message)],
-                    created_at=now,
-                )
-            ],
+            messages=messages,
             parent_task_id=parent_task.id,
             created_at=now,
             updated_at=now,
             user_id=parent_task.user_id,
             tenant_id=parent_task.tenant_id,
+            conversation_id=parent_task.conversation_id,
         )

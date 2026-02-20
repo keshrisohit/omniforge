@@ -15,6 +15,8 @@ class TestParsedResponse:
         assert parsed.final_answer is None
         assert parsed.action is None
         assert parsed.action_input is None
+        assert parsed.is_clarification is False
+        assert parsed.clarification_question is None
 
     def test_custom_values(self) -> None:
         """ParsedResponse should accept custom values."""
@@ -146,16 +148,19 @@ class TestReActParser:
 
         assert parsed.action_input == {"outer": {"inner": "value"}, "list": [1, 2, 3]}
 
-    def test_parse_malformed_json_returns_none(self) -> None:
-        """Should return empty ParsedResponse on malformed JSON, not exception."""
+    def test_parse_malformed_json_stores_error_in_thought(self) -> None:
+        """Malformed JSON returns empty ParsedResponse with parse error in thought."""
         response = """
 {invalid json here}
 """
         parsed = ReActParser.parse(response)
 
-        assert parsed.thought is None
+        # thought now contains a diagnostic parse error string
+        assert parsed.thought is not None
+        assert "Parse error" in parsed.thought
         assert parsed.action is None
         assert parsed.action_input is None
+        assert parsed.is_final is False
 
     def test_parse_empty_json_object(self) -> None:
         """Should parse empty action_input object."""
@@ -490,3 +495,50 @@ class TestReActParser:
         assert parsed.final_answer is None  # Empty string should be treated as None
         assert parsed.action is None
         assert parsed.action_input is None
+
+    def test_parse_clarification_format(self) -> None:
+        """Should parse clarification_question into is_clarification=True."""
+        response = """
+{
+  "thought": "I need to know the target directory",
+  "clarification_question": "Which directory should I search in?",
+  "is_final": false
+}
+"""
+        parsed = ReActParser.parse(response)
+
+        assert parsed.is_clarification is True
+        assert parsed.clarification_question == "Which directory should I search in?"
+        assert parsed.is_final is False
+        assert parsed.action is None
+        assert parsed.final_answer is None
+
+    def test_parse_clarification_not_set_for_action(self) -> None:
+        """Normal action response should not set is_clarification."""
+        response = """
+{
+  "thought": "I'll use bash",
+  "action": "bash",
+  "action_input": {"command": "ls"},
+  "is_final": false
+}
+"""
+        parsed = ReActParser.parse(response)
+
+        assert parsed.is_clarification is False
+        assert parsed.clarification_question is None
+        assert parsed.action == "bash"
+
+    def test_parse_clarification_empty_question_ignored(self) -> None:
+        """Empty clarification_question should not trigger is_clarification."""
+        response = """
+{
+  "thought": "hm",
+  "clarification_question": "",
+  "is_final": false
+}
+"""
+        parsed = ReActParser.parse(response)
+
+        assert parsed.is_clarification is False
+        assert parsed.clarification_question is None

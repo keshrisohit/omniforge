@@ -9,7 +9,7 @@ Verifies that MasterAgent correctly:
 """
 
 from datetime import datetime
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,7 +22,11 @@ from omniforge.storage.memory import InMemoryAgentRepository
 from omniforge.tasks.models import Task, TaskMessage, TaskState
 
 
-def make_task(message: str = "hello", user_id: str = "user-1") -> Task:
+def make_task(
+    message: str = "hello",
+    user_id: str = "user-1",
+    conversation_id: Optional[str] = None,
+) -> Task:
     now = datetime.utcnow()
     return Task(
         id="task-1",
@@ -40,6 +44,7 @@ def make_task(message: str = "hello", user_id: str = "user-1") -> Task:
         updated_at=now,
         user_id=user_id,
         tenant_id="test-tenant",
+        conversation_id=conversation_id,
     )
 
 
@@ -220,6 +225,65 @@ class TestDelegationForwarding:
             assert event.task_id == task.id
 
 
+class TestDelegationStatusSignal:
+    """Tests for the delegation WORKING status event emitted before forwarding."""
+
+    @pytest.mark.asyncio
+    async def test_delegation_emits_working_status_first(self, agent: MasterAgent) -> None:
+        """First event when delegating must be TaskStatusEvent(WORKING)."""
+        now = datetime.utcnow()
+
+        async def mock_process(task: Task) -> AsyncIterator:
+            yield TaskMessageEvent(
+                task_id=task.id,
+                timestamp=now,
+                message_parts=[TextPart(text="Hello from sub-agent")],
+            )
+            yield TaskDoneEvent(
+                task_id=task.id,
+                timestamp=now,
+                final_state=TaskState.COMPLETED,
+            )
+
+        mock_sub = MagicMock()
+        mock_sub.identity.id = "test-agent"
+        mock_sub.process_task = mock_process
+        agent._delegated_agent = mock_sub
+
+        task = make_task("Do something")
+        events = [e async for e in agent.process_task(task)]
+
+        # First event must be a WORKING status
+        assert isinstance(events[0], TaskStatusEvent)
+        assert events[0].state == TaskState.WORKING
+
+    @pytest.mark.asyncio
+    async def test_delegation_status_message_names_agent(self, agent: MasterAgent) -> None:
+        """WORKING status message should mention the delegated agent id."""
+        now = datetime.utcnow()
+
+        async def mock_process(task: Task) -> AsyncIterator:
+            yield TaskDoneEvent(
+                task_id=task.id,
+                timestamp=now,
+                final_state=TaskState.COMPLETED,
+            )
+
+        mock_sub = MagicMock()
+        mock_sub.identity.id = "my-special-agent"
+        mock_sub.process_task = mock_process
+        agent._delegated_agent = mock_sub
+
+        task = make_task("Something")
+        events = [e async for e in agent.process_task(task)]
+
+        status_events = [e for e in events if isinstance(e, TaskStatusEvent)]
+        assert any(
+            e.state == TaskState.WORKING and "my-special-agent" in (e.message or "")
+            for e in status_events
+        )
+
+
 class TestMakeSubtask:
     """Tests for _make_subtask helper."""
 
@@ -247,7 +311,7 @@ class TestMakeSubtask:
         assert subtask.tenant_id == "test-tenant"
 
     def test_subtask_contains_user_message(self, agent: MasterAgent) -> None:
-        """Subtask contains the latest user message from the parent."""
+        """Single-message parent produces a 1-message subtask (no prior context to include)."""
         mock_sub = MagicMock()
         mock_sub.identity.id = "test-sub"
         agent._delegated_agent = mock_sub
@@ -257,3 +321,98 @@ class TestMakeSubtask:
 
         assert len(subtask.messages) == 1
         assert subtask.messages[0].parts[0].text == "Create a skill for formatting names"
+
+    def test_subtask_inherits_conversation_id(self, agent: MasterAgent) -> None:
+        """Subtask inherits conversation_id from parent task."""
+        mock_sub = MagicMock()
+        mock_sub.identity.id = "test-sub"
+        agent._delegated_agent = mock_sub
+
+        parent = make_task("hello", conversation_id="conv-abc-123")
+        subtask = agent._make_subtask(parent)
+
+        assert subtask.conversation_id == "conv-abc-123"
+
+    def test_subtask_conversation_id_none_when_parent_has_none(self, agent: MasterAgent) -> None:
+        """Subtask conversation_id is None when parent has no conversation_id."""
+        mock_sub = MagicMock()
+        mock_sub.identity.id = "test-sub"
+        agent._delegated_agent = mock_sub
+
+        parent = make_task("hello", conversation_id=None)
+        subtask = agent._make_subtask(parent)
+
+        assert subtask.conversation_id is None
+
+    def test_subtask_includes_prior_context(self, agent: MasterAgent) -> None:
+        """Multi-message parent includes up to 5 prior messages in subtask."""
+        from omniforge.agents.models import TextPart as TP
+
+        mock_sub = MagicMock()
+        mock_sub.identity.id = "test-sub"
+        agent._delegated_agent = mock_sub
+
+        # Build a parent with 3 messages: 2 context + 1 current user message
+        now = datetime.utcnow()
+        parent = Task(
+            id="parent-task",
+            agent_id="master-agent",
+            state=TaskState.SUBMITTED,
+            messages=[
+                TaskMessage(id="m1", role="user", parts=[TP(text="First msg")], created_at=now),
+                TaskMessage(id="m2", role="agent", parts=[TP(text="First reply")], created_at=now),
+                TaskMessage(id="m3", role="user", parts=[TP(text="Current msg")], created_at=now),
+            ],
+            created_at=now,
+            updated_at=now,
+            user_id="user-1",
+            tenant_id="test-tenant",
+        )
+
+        subtask = agent._make_subtask(parent)
+
+        # Should have 2 prior messages + 1 current = 3 total
+        assert len(subtask.messages) == 3
+        assert subtask.messages[0].parts[0].text == "First msg"
+        assert subtask.messages[1].parts[0].text == "First reply"
+        assert subtask.messages[2].parts[0].text == "Current msg"
+
+    def test_subtask_prior_context_capped_at_five(self, agent: MasterAgent) -> None:
+        """Subtask prior context is capped at 5 messages even if parent has more."""
+        from omniforge.agents.models import TextPart as TP
+
+        mock_sub = MagicMock()
+        mock_sub.identity.id = "test-sub"
+        agent._delegated_agent = mock_sub
+
+        # Build a parent with 8 messages (7 prior + 1 current)
+        now = datetime.utcnow()
+        prior_msgs = [
+            TaskMessage(
+                id=f"m{i}",
+                role="user" if i % 2 == 0 else "agent",
+                parts=[TP(text=f"msg {i}")],
+                created_at=now,
+            )
+            for i in range(7)
+        ]
+        current_msg = TaskMessage(
+            id="m7", role="user", parts=[TP(text="current")], created_at=now
+        )
+        parent = Task(
+            id="parent-task",
+            agent_id="master-agent",
+            state=TaskState.SUBMITTED,
+            messages=prior_msgs + [current_msg],
+            created_at=now,
+            updated_at=now,
+            user_id="user-1",
+            tenant_id="test-tenant",
+        )
+
+        subtask = agent._make_subtask(parent)
+
+        # Should have at most 5 prior + 1 current = 6 messages
+        assert len(subtask.messages) == 6
+        # The last message should be the current user message
+        assert subtask.messages[-1].parts[0].text == "current"

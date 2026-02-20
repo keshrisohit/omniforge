@@ -5,12 +5,15 @@ that requires minimal configuration. Just provide a system prompt and user messa
 and the agent handles tool selection, execution, and iteration automatically.
 """
 
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, AsyncIterator, Optional
 
 from omniforge.agents.cot.agent import CoTAgent
 from omniforge.agents.cot.engine import ReasoningEngine
 from omniforge.agents.cot.parser import ReActParser
 from omniforge.agents.cot.prompts import build_react_system_prompt
+from omniforge.agents.events import TaskDoneEvent, TaskEvent, TaskStatusEvent
 from omniforge.agents.helpers import create_simple_task, get_latest_user_message
 from omniforge.agents.models import (
     AgentCapabilities,
@@ -18,10 +21,25 @@ from omniforge.agents.models import (
     AgentSkill,
     SkillInputMode,
     SkillOutputMode,
+    TextPart,
 )
-from omniforge.tasks.models import Task
+from omniforge.tasks.models import Task, TaskState
 from omniforge.tools.registry import ToolRegistry
 from omniforge.tools.setup import get_default_tool_registry
+
+
+_HITL_SESSION_TTL_SECONDS = 3600  # HITL sessions expire after 1 hour
+_MAX_CLARIFICATIONS = 3  # Max consecutive clarification requests per task
+
+
+@dataclass
+class PausedSession:
+    """Snapshot of a paused HITL ReAct loop, waiting for user clarification."""
+
+    conversation: list[dict[str, str]]  # ReAct conversation snapshot
+    question: str  # The clarification question asked
+    task_id: str  # ID of the task that was paused
+    paused_at: datetime = field(default_factory=datetime.utcnow)
 
 
 class SimpleAutonomousAgent(CoTAgent):
@@ -77,7 +95,7 @@ class SimpleAutonomousAgent(CoTAgent):
         streaming=True,
         multi_turn=False,
         push_notifications=False,
-        hitl_support=False,
+        hitl_support=True,
     )
 
     skills = [
@@ -125,6 +143,11 @@ class SimpleAutonomousAgent(CoTAgent):
         self._temperature = temperature
         self._parser = ReActParser()
 
+        # HITL state: maps (conversation_id or task_id) → PausedSession for mid-loop resumption
+        self._hitl_sessions: dict[str, PausedSession] = {}
+        # Set inside reason() when a clarification is requested; read by process_task()
+        self._pending_hitl_question: Optional[str] = None
+
     async def reason(self, task: Task, engine: ReasoningEngine) -> str:
         """Execute autonomous ReAct reasoning loop.
 
@@ -148,16 +171,37 @@ class SimpleAutonomousAgent(CoTAgent):
         # Build system prompt
         system_prompt = self._build_system_prompt(engine)
 
-        # Extract current user message (latest user message in task)
-        user_message = self._extract_user_message(task)
+        # Resume a paused HITL conversation, or start fresh
+        session_key = task.conversation_id or task.id
+        if session_key in self._hitl_sessions:
+            paused = self._hitl_sessions[session_key]
+            age_secs = (datetime.utcnow() - paused.paused_at).total_seconds()
+            if age_secs > _HITL_SESSION_TTL_SECONDS:
+                # Session expired — discard and start fresh
+                del self._hitl_sessions[session_key]
+                user_message = self._extract_user_message(task)
+                conversation = [
+                    {
+                        "role": "user",
+                        "content": self._build_user_content_with_history(task, user_message),
+                    },
+                ]
+            else:
+                paused = self._hitl_sessions.pop(session_key)
+                conversation = paused.conversation
+                user_answer = self._extract_user_message(task)
+                conversation.append({"role": "user", "content": user_answer})
+        else:
+            user_message = self._extract_user_message(task)
+            conversation = [
+                {
+                    "role": "user",
+                    "content": self._build_user_content_with_history(task, user_message),
+                },
+            ]
 
-        # Initialize conversation with history context from prior task messages
-        conversation: list[dict[str, str]] = [
-            {
-                "role": "user",
-                "content": self._build_user_content_with_history(task, user_message),
-            },
-        ]
+        # Track how many times we've asked for clarification in this task
+        clarification_count = 0
 
         # Execute ReAct loop
         for iteration in range(self._max_iterations):
@@ -179,7 +223,12 @@ class SimpleAutonomousAgent(CoTAgent):
             if not llm_result.success or not llm_result.value:
                 raise RuntimeError(f"LLM call failed: {llm_result.error}")
 
-            llm_response = llm_result.value.get("content", "")
+            llm_response = llm_result.value.get("content") or ""
+            if not llm_response.strip():
+                raise RuntimeError(
+                    "The model returned an empty response. "
+                    "This may be a model configuration issue — try again or check your API key."
+                )
 
             # Parse response for action or final answer
             parsed = self._parser.parse(llm_response)
@@ -198,10 +247,33 @@ class SimpleAutonomousAgent(CoTAgent):
                 )
                 return final_message
 
+            # Check for clarification request (HITL pause)
+            if parsed.is_clarification:
+                clarification_count += 1
+                if clarification_count > _MAX_CLARIFICATIONS:
+                    # Too many back-and-forth questions — give up gracefully
+                    return (
+                        "I've asked for more information several times but couldn't get "
+                        "enough context to complete your request. Please restart and provide "
+                        "a more detailed description of what you need."
+                    )
+                question = parsed.clarification_question or "Could you provide more details?"
+                engine.add_thinking(f"Needs clarification: {question}", confidence=None)
+                # Save conversation state (including this assistant turn) for resumption
+                self._hitl_sessions[session_key] = PausedSession(
+                    conversation=conversation + [{"role": "assistant", "content": llm_response}],
+                    question=question,
+                    task_id=task.id,
+                )
+                self._pending_hitl_question = question
+                return question
+
             # Must have an action if not final
             if not parsed.action:
+                raw_preview = llm_response[:120] if llm_response else "(empty)"
                 raise ValueError(
-                    f"LLM response has no action or final answer: {llm_response[:200]}"
+                    f"The model did not produce a valid action or final answer. "
+                    f"Response preview: {raw_preview!r}"
                 )
 
             # Execute tool action
@@ -216,31 +288,57 @@ class SimpleAutonomousAgent(CoTAgent):
                 # Format observation
                 if tool_result.success:
                     result_value = tool_result.value
-                    # Truncate large results for context efficiency
                     result_str = str(result_value)
                     if len(result_str) > 2000:
-                        result_str = result_str[:2000] + "...(truncated)"
+                        result_str = (
+                            result_str[:2000]
+                            + "...[result truncated — only first 2000 chars shown]"
+                        )
                     observation = f"Observation: {result_str}"
                 else:
                     observation = f"Observation: Error - {tool_result.error}"
 
             except Exception as e:
                 observation = f"Observation: Tool execution failed - {str(e)}"
-
                 engine.add_thinking(f"Tool error: {str(e)}", confidence=0.0)
-                raise e
 
 
             # Add to conversation
             conversation.append({"role": "assistant", "content": llm_response})
             conversation.append({"role": "user", "content": observation})
 
-        # Max iterations reached
+        # Max iterations reached — produce a user-facing message, not raw internals
         raise RuntimeError(
-            f"Agent reached maximum iterations ({self._max_iterations}) "
-            f"without producing final answer. Last conversation:\n"
-            f"{conversation[-2:]}"
+            f"Could not complete your request within {self._max_iterations} reasoning steps. "
+            "Please try rephrasing or breaking your request into smaller steps."
         )
+
+    async def process_task(self, task: Task) -> AsyncIterator[TaskEvent]:  # type: ignore[override]
+        """Process a task with HITL support.
+
+        On first call: runs normal ReAct loop.
+        When LLM requests clarification: saves loop state, emits INPUT_REQUIRED.
+        On subsequent call: resumes saved conversation with the user's answer.
+        """
+        from datetime import datetime
+
+        # Run CoTAgent's process_task, intercepting TaskDoneEvent when HITL is pending
+        async for event in super().process_task(task):
+            if (
+                self._pending_hitl_question is not None
+                and isinstance(event, TaskDoneEvent)
+                and event.final_state == TaskState.COMPLETED
+            ):
+                # Replace COMPLETED with INPUT_REQUIRED; the question was already
+                # streamed as a TaskMessageEvent by CoTAgent
+                self._pending_hitl_question = None
+                yield TaskStatusEvent(
+                    task_id=task.id,
+                    timestamp=datetime.utcnow(),
+                    state=TaskState.INPUT_REQUIRED,
+                )
+                return
+            yield event
 
     async def run(self, prompt: str, user_id: str = "default-user") -> str:
         """Simple API to run agent with a user prompt.

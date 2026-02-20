@@ -20,6 +20,8 @@ class ParsedResponse:
         final_answer: The final response text (if is_final=True)
         action: The tool name to call (if not final)
         action_input: Arguments for the tool as a parsed dictionary
+        is_clarification: Whether this response asks the user for more info
+        clarification_question: The question to ask the user (if is_clarification=True)
     """
 
     thought: Optional[str] = None
@@ -27,6 +29,8 @@ class ParsedResponse:
     final_answer: Optional[str] = None
     action: Optional[str] = None
     action_input: Optional[dict] = None
+    is_clarification: bool = False
+    clarification_question: Optional[str] = None
 
 
 class ReActParser:
@@ -119,6 +123,12 @@ class ReActParser:
                     parsed.final_answer = str(data["final_answer"]).strip()
                 return parsed
 
+            # Handle clarification request
+            if "clarification_question" in data and data["clarification_question"]:
+                parsed.is_clarification = True
+                parsed.clarification_question = str(data["clarification_question"]).strip()
+                return parsed
+
             # Handle action (for non-final responses)
             if "action" in data and data["action"]:
                 parsed.action = str(data["action"]).strip()
@@ -135,9 +145,12 @@ class ReActParser:
                     # Wrap other types in dict
                     parsed.action_input = {"value": action_input}
 
-        except (json.JSONDecodeError, ValueError, TypeError, KeyError):
-            # Malformed JSON or missing required fields
-            # Return empty ParsedResponse with defaults
-            pass
+        except (json.JSONDecodeError, ValueError, TypeError, KeyError) as exc:
+            # Malformed JSON — store a diagnostic in thought only when there was
+            # actual content (empty/whitespace responses are handled by the caller)
+            if response.strip():
+                parsed.thought = (
+                    f"[Parse error: {type(exc).__name__} — model response was not valid JSON]"
+                )
 
         return parsed
