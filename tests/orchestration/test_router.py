@@ -13,6 +13,7 @@ from omniforge.agents.models import (
     AgentIdentity,
     AgentSkill,
     Artifact,
+    ArtifactType,
     SecurityConfig,
     SkillInputMode,
     SkillOutputMode,
@@ -251,9 +252,10 @@ class TestTaskRouter:
             artifacts=[
                 Artifact(
                     id="artifact-1",
-                    type="document",
+                    type=ArtifactType.DOCUMENT,
                     title="Result 1",
-                    content="Content 1",
+                    inline_content="Content 1",
+                    tenant_id="test-tenant",
                 )
             ],
             created_at=datetime.utcnow(),
@@ -270,9 +272,10 @@ class TestTaskRouter:
             artifacts=[
                 Artifact(
                     id="artifact-2",
-                    type="document",
+                    type=ArtifactType.DOCUMENT,
                     title="Result 2",
-                    content="Content 2",
+                    inline_content="Content 2",
+                    tenant_id="test-tenant",
                 )
             ],
             created_at=datetime.utcnow(),

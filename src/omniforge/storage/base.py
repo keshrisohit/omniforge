@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional, Protocol
 
 if TYPE_CHECKING:
     from omniforge.agents.base import BaseAgent
+    from omniforge.agents.models import Artifact
 
 from omniforge.tasks.models import Task
 
@@ -149,5 +150,52 @@ class AgentRepository(Protocol):
 
         Returns:
             List of agents for the specified tenant
+        """
+        ...
+
+
+class ArtifactStore(Protocol):
+    """Protocol for artifact storage operations.
+
+    All operations are tenant-scoped. Cross-tenant access returns None
+    (indistinguishable from not-found) to prevent information leakage.
+    """
+
+    async def store(self, artifact: "Artifact") -> str:
+        """Persist an artifact and return its ID.
+
+        If artifact.id is None, generates a UUID and returns it.
+        If artifact.id is set, uses it as an upsert within the tenant namespace.
+
+        Args:
+            artifact: Artifact to persist (tenant_id must be set)
+
+        Returns:
+            The artifact ID (generated or existing)
+        """
+        ...
+
+    async def fetch(self, artifact_id: str, tenant_id: str) -> "Optional[Artifact]":
+        """Retrieve an artifact by ID within a tenant.
+
+        Args:
+            artifact_id: Unique identifier of the artifact
+            tenant_id: Tenant namespace to look up within
+
+        Returns:
+            Artifact if found within that tenant, None otherwise (including
+            when the artifact exists but belongs to a different tenant)
+        """
+        ...
+
+    async def delete(self, artifact_id: str, tenant_id: str) -> None:
+        """Delete an artifact by ID within a tenant.
+
+        Args:
+            artifact_id: Unique identifier of the artifact to delete
+            tenant_id: Tenant namespace to delete within
+
+        Raises:
+            ValueError: If artifact not found within that tenant
         """
         ...

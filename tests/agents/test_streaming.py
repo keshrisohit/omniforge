@@ -13,7 +13,7 @@ from omniforge.agents.events import (
     TaskMessageEvent,
     TaskStatusEvent,
 )
-from omniforge.agents.models import Artifact, TextPart
+from omniforge.agents.models import Artifact, ArtifactType, TextPart
 from omniforge.agents.streaming import (
     format_artifact_event,
     format_done_event,
@@ -77,7 +77,13 @@ class TestFormatTaskEvent:
 
     def test_format_artifact_event(self) -> None:
         """Artifact event should be formatted as valid SSE."""
-        artifact = Artifact(id="art-1", type="document", title="Result", content="Test content")
+        artifact = Artifact(
+            id="art-1",
+            type=ArtifactType.DOCUMENT,
+            title="Result",
+            inline_content="Test content",
+            tenant_id="test-tenant",
+        )
         event = TaskArtifactEvent(
             task_id="task-789",
             timestamp=datetime(2024, 1, 1, 12, 0, 0),
@@ -164,7 +170,13 @@ class TestIndividualFormatters:
 
     def test_format_artifact_event_wrapper(self) -> None:
         """format_artifact_event should delegate to format_task_event."""
-        artifact = Artifact(id="art-1", type="doc", title="T", content="C")
+        artifact = Artifact(
+            id="art-1",
+            type=ArtifactType.DOCUMENT,
+            title="T",
+            inline_content="C",
+            tenant_id="test-tenant",
+        )
         event = TaskArtifactEvent(
             task_id="task-3",
             timestamp=datetime(2024, 1, 1, 12, 0, 0),
@@ -409,7 +421,13 @@ class TestSSEFormatCompatibility:
             TaskArtifactEvent(
                 task_id="t3",
                 timestamp=datetime.now(),
-                artifact=Artifact(id="a1", type="doc", title="T", content="C"),
+                artifact=Artifact(
+                    id="a1",
+                    type=ArtifactType.DOCUMENT,
+                    title="T",
+                    inline_content="C",
+                    tenant_id="test-tenant",
+                ),
             ),
             TaskDoneEvent(
                 task_id="t4",

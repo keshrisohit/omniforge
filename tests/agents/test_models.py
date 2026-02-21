@@ -9,6 +9,8 @@ from omniforge.agents.models import (
     AgentIdentity,
     AgentSkill,
     Artifact,
+    ArtifactPart,
+    ArtifactType,
     AuthScheme,
     DataPart,
     FilePart,
@@ -353,55 +355,243 @@ class TestDataPart:
         assert part.schema_url == "https://example.com/schema.json"
 
 
+class TestArtifactType:
+    """Tests for ArtifactType enum."""
+
+    def test_all_values_serialize_to_string(self) -> None:
+        """All ArtifactType values should serialize to their string values."""
+        assert ArtifactType.DOCUMENT.value == "document"
+        assert ArtifactType.DATASET.value == "dataset"
+        assert ArtifactType.CODE.value == "code"
+        assert ArtifactType.IMAGE.value == "image"
+        assert ArtifactType.STRUCTURED.value == "structured"
+
+    def test_artifact_type_is_str_enum(self) -> None:
+        """ArtifactType should behave as a string."""
+        assert ArtifactType.CODE == "code"
+        assert str(ArtifactType.DOCUMENT) == "ArtifactType.DOCUMENT"
+
+
 class TestArtifact:
     """Tests for Artifact model."""
 
-    def test_create_artifact_with_string_content(self) -> None:
-        """Should create artifact with string content."""
+    def test_create_artifact_with_inline_content_only(self) -> None:
+        """Should create artifact with inline_content and no storage_url."""
         artifact = Artifact(
-            id="artifact-1",
-            type="document",
+            type=ArtifactType.DOCUMENT,
             title="Analysis Report",
-            content="This is the report content.",
+            inline_content="This is the report content.",
+            tenant_id="tenant-1",
         )
 
-        assert artifact.id == "artifact-1"
-        assert artifact.type == "document"
+        assert artifact.id is None
+        assert artifact.type == ArtifactType.DOCUMENT
         assert artifact.title == "Analysis Report"
-        assert artifact.content == "This is the report content."
+        assert artifact.inline_content == "This is the report content."
+        assert artifact.storage_url is None
 
-    def test_create_artifact_with_dict_content(self) -> None:
-        """Should create artifact with structured content."""
+    def test_create_artifact_with_storage_url_only(self) -> None:
+        """Should create artifact with storage_url and no inline_content."""
         artifact = Artifact(
-            id="artifact-2",
-            type="data",
+            type=ArtifactType.IMAGE,
+            title="Profile Photo",
+            storage_url="https://storage.example.com/photo.png",
+            tenant_id="tenant-1",
+        )
+
+        assert artifact.inline_content is None
+        assert artifact.storage_url == "https://storage.example.com/photo.png"
+
+    def test_create_artifact_with_both_inline_and_storage(self) -> None:
+        """Should create artifact when both inline_content and storage_url are provided."""
+        artifact = Artifact(
+            type=ArtifactType.CODE,
+            title="Script",
+            inline_content="print('hello')",
+            storage_url="https://storage.example.com/script.py",
+            tenant_id="tenant-1",
+        )
+
+        assert artifact.inline_content == "print('hello')"
+        assert artifact.storage_url == "https://storage.example.com/script.py"
+
+    def test_create_artifact_with_dict_inline_content(self) -> None:
+        """Should create artifact with dict as inline_content."""
+        artifact = Artifact(
+            type=ArtifactType.STRUCTURED,
             title="Metrics",
-            content={"cpu": 45.2, "memory": 78.5},
+            inline_content={"cpu": 45.2, "memory": 78.5},
+            tenant_id="tenant-1",
         )
 
-        assert artifact.content == {"cpu": 45.2, "memory": 78.5}
+        assert artifact.inline_content == {"cpu": 45.2, "memory": 78.5}
 
-    def test_create_artifact_with_metadata(self) -> None:
-        """Should create artifact with metadata."""
+    def test_create_artifact_id_defaults_to_none(self) -> None:
+        """Artifact id should default to None when not provided."""
         artifact = Artifact(
-            id="artifact-3",
-            type="code",
-            title="Function",
-            content="def hello(): pass",
-            metadata={"language": "python", "lines": 1, "complexity": 1.0},
+            type=ArtifactType.DATASET,
+            title="My Dataset",
+            inline_content=[1, 2, 3],
+            tenant_id="tenant-1",
         )
 
-        assert artifact.metadata == {"language": "python", "lines": 1, "complexity": 1.0}
+        assert artifact.id is None
 
-    def test_artifact_with_long_id_raises_error(self) -> None:
-        """Should fail with id exceeding max length."""
+    def test_create_artifact_with_explicit_id(self) -> None:
+        """Should accept an explicit id."""
+        artifact = Artifact(
+            id="artifact-abc",
+            type=ArtifactType.CODE,
+            title="Module",
+            inline_content="def foo(): pass",
+            tenant_id="tenant-1",
+        )
+
+        assert artifact.id == "artifact-abc"
+
+    def test_artifact_without_inline_content_and_storage_url_raises_error(self) -> None:
+        """Should raise ValidationError when both inline_content and storage_url are absent."""
+        with pytest.raises(ValidationError, match="at least one of inline_content or storage_url"):
+            Artifact(
+                type=ArtifactType.DOCUMENT,
+                title="Empty Artifact",
+                tenant_id="tenant-1",
+            )
+
+    def test_artifact_without_tenant_id_raises_error(self) -> None:
+        """Should raise ValidationError when tenant_id is missing."""
         with pytest.raises(ValidationError):
-            Artifact(id="a" * 256, type="document", title="Test", content="Content")
+            Artifact(
+                type=ArtifactType.DOCUMENT,
+                title="No Tenant",
+                inline_content="content",
+            )
+
+    def test_artifact_with_invalid_type_raises_error(self) -> None:
+        """Should raise ValidationError when type is not a valid ArtifactType."""
+        with pytest.raises(ValidationError):
+            Artifact(
+                type="unknown_type",  # type: ignore[arg-type]
+                title="Bad Type",
+                inline_content="content",
+                tenant_id="tenant-1",
+            )
+
+    def test_artifact_with_negative_size_bytes_raises_error(self) -> None:
+        """Should raise ValidationError when size_bytes is negative."""
+        with pytest.raises(ValidationError):
+            Artifact(
+                type=ArtifactType.CODE,
+                title="Script",
+                inline_content="content",
+                tenant_id="tenant-1",
+                size_bytes=-1,
+            )
+
+    def test_artifact_optional_fields_default_to_none(self) -> None:
+        """All optional fields should default to None."""
+        artifact = Artifact(
+            type=ArtifactType.DOCUMENT,
+            title="Doc",
+            inline_content="content",
+            tenant_id="tenant-1",
+        )
+
+        assert artifact.mime_type is None
+        assert artifact.size_bytes is None
+        assert artifact.schema_url is None
+        assert artifact.created_by_agent_id is None
+        assert artifact.created_at is None
+        assert artifact.metadata is None
+
+    def test_artifact_with_all_optional_fields(self) -> None:
+        """Should create artifact with all optional fields populated."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(tz=timezone.utc)
+        artifact = Artifact(
+            id="artifact-full",
+            type=ArtifactType.CODE,
+            title="Full Artifact",
+            inline_content="def main(): pass",
+            tenant_id="tenant-1",
+            mime_type="text/x-python",
+            size_bytes=18,
+            schema_url="https://schema.example.com/code.json",
+            created_by_agent_id="agent-xyz",
+            created_at=now,
+            metadata={"language": "python"},
+        )
+
+        assert artifact.mime_type == "text/x-python"
+        assert artifact.size_bytes == 18
+        assert artifact.schema_url == "https://schema.example.com/code.json"
+        assert artifact.created_by_agent_id == "agent-xyz"
+        assert artifact.created_at == now
+
+    def test_artifact_serialization_round_trip(self) -> None:
+        """Artifact should serialize and deserialize correctly."""
+        artifact = Artifact(
+            id="artifact-rt",
+            type=ArtifactType.DOCUMENT,
+            title="Round Trip",
+            inline_content="content here",
+            tenant_id="tenant-1",
+        )
+
+        data = artifact.model_dump()
+        restored = Artifact.model_validate(data)
+
+        assert restored.id == artifact.id
+        assert restored.type == artifact.type
+        assert restored.title == artifact.title
+        assert restored.inline_content == artifact.inline_content
+        assert restored.tenant_id == artifact.tenant_id
 
     def test_artifact_with_long_title_raises_error(self) -> None:
         """Should fail with title exceeding max length."""
         with pytest.raises(ValidationError):
-            Artifact(id="artifact-1", type="document", title="a" * 501, content="Content")
+            Artifact(
+                type=ArtifactType.DOCUMENT,
+                title="a" * 501,
+                inline_content="content",
+                tenant_id="tenant-1",
+            )
+
+
+class TestArtifactPart:
+    """Tests for ArtifactPart model."""
+
+    def test_create_artifact_part_with_artifact_id_only(self) -> None:
+        """Should create ArtifactPart with only artifact_id."""
+        part = ArtifactPart(artifact_id="artifact-abc")
+
+        assert part.type == "artifact"
+        assert part.artifact_id == "artifact-abc"
+        assert part.title is None
+
+    def test_create_artifact_part_with_title(self) -> None:
+        """Should create ArtifactPart with optional title."""
+        part = ArtifactPart(artifact_id="artifact-abc", title="My Report")
+
+        assert part.title == "My Report"
+
+    def test_artifact_part_type_is_frozen(self) -> None:
+        """ArtifactPart type field should not be mutable."""
+        part = ArtifactPart(artifact_id="artifact-abc")
+
+        with pytest.raises(ValidationError):
+            part.type = "other"  # type: ignore[misc]
+
+    def test_artifact_part_with_empty_artifact_id_raises_error(self) -> None:
+        """Should raise ValidationError when artifact_id is empty."""
+        with pytest.raises(ValidationError):
+            ArtifactPart(artifact_id="")
+
+    def test_artifact_part_with_too_long_artifact_id_raises_error(self) -> None:
+        """Should raise ValidationError when artifact_id exceeds max length."""
+        with pytest.raises(ValidationError):
+            ArtifactPart(artifact_id="a" * 256)
 
 
 class TestMessagePartUnion:
@@ -423,6 +613,11 @@ class TestMessagePartUnion:
         """Should accept DataPart as MessagePart."""
         part: MessagePart = DataPart(data={"key": "value"})
         assert isinstance(part, DataPart)
+
+    def test_message_part_accepts_artifact_part(self) -> None:
+        """Should accept ArtifactPart as MessagePart."""
+        part: MessagePart = ArtifactPart(artifact_id="artifact-xyz")
+        assert isinstance(part, ArtifactPart)
 
 
 class TestHandoffCapability:

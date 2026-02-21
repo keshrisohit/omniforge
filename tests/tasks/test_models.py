@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from omniforge.agents.models import Artifact, TextPart
+from omniforge.agents.models import Artifact, ArtifactType, TextPart
 from omniforge.tasks.models import (
     Task,
     TaskCreateRequest,
@@ -167,9 +167,10 @@ class TestTask:
         message = TaskMessage(id="msg-1", role="user", parts=[TextPart(text="Hi")], created_at=now)
         artifact = Artifact(
             id="art-1",
-            type="document",
+            type=ArtifactType.DOCUMENT,
             title="Result",
-            content="Output",
+            inline_content="Output",
+            tenant_id="test-tenant",
         )
 
         task = Task(

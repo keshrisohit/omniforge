@@ -12,7 +12,7 @@ from omniforge.agents.events import (
     TaskMessageEvent,
     TaskStatusEvent,
 )
-from omniforge.agents.models import Artifact, TextPart
+from omniforge.agents.models import Artifact, ArtifactType, TextPart
 from omniforge.tasks.models import TaskState
 
 
@@ -114,9 +114,10 @@ class TestTaskArtifactEvent:
         now = datetime.now(timezone.utc)
         artifact = Artifact(
             id="art-123",
-            type="document",
+            type=ArtifactType.DOCUMENT,
             title="Generated Report",
-            content="Report content here",
+            inline_content="Report content here",
+            tenant_id="test-tenant",
         )
         event = TaskArtifactEvent(
             task_id="task-123",
@@ -131,7 +132,13 @@ class TestTaskArtifactEvent:
 
     def test_artifact_event_type_is_literal(self) -> None:
         """TaskArtifactEvent type field should always be 'artifact'."""
-        artifact = Artifact(id="art-456", type="image", title="Chart", content="base64data")
+        artifact = Artifact(
+            id="art-456",
+            type=ArtifactType.IMAGE,
+            title="Chart",
+            inline_content="base64data",
+            tenant_id="test-tenant",
+        )
         event = TaskArtifactEvent(
             task_id="task-456",
             timestamp=datetime.now(timezone.utc),

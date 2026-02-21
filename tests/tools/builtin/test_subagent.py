@@ -22,6 +22,7 @@ from omniforge.agents.models import (
     AgentIdentity,
     AgentSkill,
     Artifact,
+    ArtifactType,
     SkillInputMode,
     SkillOutputMode,
     TextPart,
@@ -495,9 +496,10 @@ async def test_subagent_tool_collects_artifacts(agent_registry, tool_context):
                 timestamp=datetime.now(timezone.utc),
                 artifact=Artifact(
                     id="artifact-1",
-                    type="document",
+                    type=ArtifactType.DOCUMENT,
                     title="Result doc",
-                    content="Some content here",
+                    inline_content="Some content here",
+                    tenant_id="test-tenant",
                 ),
             )
             yield TaskMessageEvent(

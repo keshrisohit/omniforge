@@ -11,6 +11,8 @@ from omniforge.agents.models import (
     AgentCapabilities,
     AgentIdentity,
     AgentSkill,
+    Artifact,
+    ArtifactType,
     SkillInputMode,
     SkillOutputMode,
     TextPart,
@@ -388,9 +390,14 @@ class TestTaskManagerApplyEvent:
     def test_apply_artifact_event(self, base_task: Task) -> None:
         """apply_event() with TaskArtifactEvent should append artifact to artifacts list."""
         from omniforge.agents.events import TaskArtifactEvent
-        from omniforge.agents.models import Artifact
 
-        artifact = Artifact(id="art-1", type="document", title="Result", content="result text")
+        artifact = Artifact(
+            id="art-1",
+            type=ArtifactType.DOCUMENT,
+            title="Result",
+            inline_content="result text",
+            tenant_id="test-tenant",
+        )
         event = TaskArtifactEvent(
             task_id="task-1", timestamp=datetime.now(timezone.utc), artifact=artifact
         )

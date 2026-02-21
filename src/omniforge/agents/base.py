@@ -74,6 +74,7 @@ class BaseAgent(ABC):
         agent_id: Optional[UUID] = None,
         tenant_id: Optional[str] = None,
         prompt_config: Optional[Any] = None,
+        artifact_store: Optional[Any] = None,
     ) -> None:
         """Initialize the agent with a unique ID and optional tenant.
 
@@ -85,10 +86,13 @@ class BaseAgent(ABC):
             prompt_config: Optional PromptConfig for the agent.
                           If provided, the agent will use this configuration
                           to compose prompts. Type is Any to avoid circular import.
+            artifact_store: Optional ArtifactStore for persisting agent artifacts.
+                           Type is Any to avoid circular import with storage module.
         """
         self._id: UUID = agent_id if agent_id is not None else uuid4()
         self.tenant_id: Optional[str] = tenant_id
         self.prompt_config: Optional[Any] = prompt_config
+        self.artifact_store: Optional[Any] = artifact_store
 
     def get_agent_card(self, service_endpoint: str) -> AgentCard:
         """Generate an A2A-compliant agent card.

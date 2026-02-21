@@ -6,8 +6,10 @@ for tasks and agents, suitable for development and testing.
 
 import asyncio
 from typing import Optional
+from uuid import uuid4
 
 from omniforge.agents.base import BaseAgent
+from omniforge.agents.models import Artifact
 from omniforge.tasks.models import Task
 
 
@@ -226,3 +228,81 @@ class InMemoryAgentRepository:
                 if hasattr(agent, "tenant_id") and agent.tenant_id == tenant_id
             ]
             return tenant_agents[:limit]
+
+
+class InMemoryArtifactRepository:
+    """Thread-safe in-memory implementation of ArtifactStore.
+
+    Stores artifacts in a nested dict: {tenant_id: {artifact_id: Artifact}}.
+    Returns deep copies on fetch to prevent mutation of stored state.
+
+    Attributes:
+        _artifacts: Nested dict mapping tenant_id -> artifact_id -> Artifact
+        _lock: Asyncio lock for thread-safe operations
+    """
+
+    def __init__(self) -> None:
+        """Initialize the in-memory artifact repository."""
+        self._artifacts: dict[str, dict[str, Artifact]] = {}
+        self._lock = asyncio.Lock()
+
+    async def store(self, artifact: Artifact) -> str:
+        """Persist an artifact and return its ID.
+
+        Generates a UUID if artifact.id is None. Upserts within the
+        tenant namespace, so calling store() with an existing ID overwrites.
+
+        Args:
+            artifact: Artifact to persist (tenant_id must be set)
+
+        Returns:
+            The artifact ID (generated or existing)
+        """
+        async with self._lock:
+            artifact_id = artifact.id if artifact.id is not None else str(uuid4())
+            tenant_id = artifact.tenant_id
+
+            if tenant_id not in self._artifacts:
+                self._artifacts[tenant_id] = {}
+
+            stored = artifact.model_copy(update={"id": artifact_id})
+            self._artifacts[tenant_id][artifact_id] = stored
+            return artifact_id
+
+    async def fetch(self, artifact_id: str, tenant_id: str) -> Optional[Artifact]:
+        """Retrieve an artifact by ID within a tenant.
+
+        Returns None if not found or if the artifact belongs to a different tenant,
+        making cross-tenant access indistinguishable from not-found.
+
+        Args:
+            artifact_id: Unique identifier of the artifact
+            tenant_id: Tenant namespace to look up within
+
+        Returns:
+            Deep copy of the artifact if found, None otherwise
+        """
+        async with self._lock:
+            tenant_store = self._artifacts.get(tenant_id)
+            if tenant_store is None:
+                return None
+            artifact = tenant_store.get(artifact_id)
+            if artifact is None:
+                return None
+            return artifact.model_copy(deep=True)
+
+    async def delete(self, artifact_id: str, tenant_id: str) -> None:
+        """Delete an artifact by ID within a tenant.
+
+        Args:
+            artifact_id: Unique identifier of the artifact to delete
+            tenant_id: Tenant namespace to delete within
+
+        Raises:
+            ValueError: If artifact not found within that tenant
+        """
+        async with self._lock:
+            tenant_store = self._artifacts.get(tenant_id)
+            if tenant_store is None or artifact_id not in tenant_store:
+                raise ValueError(f"Artifact {artifact_id} not found for tenant {tenant_id}")
+            del tenant_store[artifact_id]

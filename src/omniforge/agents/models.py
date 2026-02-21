@@ -4,10 +4,11 @@ This module defines the data models for agent identity, capabilities, skills,
 message parts, and artifacts following the A2A protocol specification.
 """
 
+from datetime import datetime
 from enum import Enum
 from typing import Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class SkillInputMode(str, Enum):
@@ -25,6 +26,16 @@ class SkillOutputMode(str, Enum):
     FILE = "file"
     STRUCTURED = "structured"
     ARTIFACT = "artifact"
+
+
+class ArtifactType(str, Enum):
+    """Closed set of artifact categories."""
+
+    DOCUMENT = "document"
+    DATASET = "dataset"
+    CODE = "code"
+    IMAGE = "image"
+    STRUCTURED = "structured"
 
 
 class AuthScheme(str, Enum):
@@ -305,23 +316,62 @@ class DataPart(BaseModel):
     schema_url: Optional[str] = None
 
 
+class ArtifactPart(BaseModel):
+    """Reference to a stored artifact, used as a message part.
+
+    Attributes:
+        type: Message part type identifier (always "artifact")
+        artifact_id: ID of the stored artifact
+        title: Optional human-readable hint
+    """
+
+    type: str = Field(default="artifact", frozen=True)
+    artifact_id: str = Field(..., min_length=1, max_length=255)
+    title: Optional[str] = None
+
+
 # Union type for all message parts
-MessagePart = Union[TextPart, FilePart, DataPart]
+MessagePart = Union[TextPart, FilePart, DataPart, ArtifactPart]
 
 
 class Artifact(BaseModel):
     """Agent output artifact.
 
     Attributes:
-        id: Unique identifier for the artifact
-        type: Type of artifact (e.g., "document", "image", "code")
+        id: Unique identifier for the artifact. If None, the store generates a UUID.
+        type: Artifact category from the ArtifactType enum
         title: Human-readable artifact title
-        content: The artifact content
+        inline_content: Artifact content stored inline (str, dict, or list)
         metadata: Optional metadata dictionary
+        tenant_id: Tenant namespace for store-level isolation
+        storage_url: External URL where artifact content is stored
+        mime_type: IANA media type of the artifact content
+        size_bytes: Size of the artifact content in bytes
+        schema_url: JSON Schema URL for structured artifact types
+        created_by_agent_id: ID of the agent that produced this artifact
+        created_at: Timestamp when the artifact was created
     """
 
-    id: str = Field(..., min_length=1, max_length=255)
-    type: str = Field(..., min_length=1, max_length=100)
+    id: Optional[str] = None
+    type: ArtifactType
     title: str = Field(..., min_length=1, max_length=500)
-    content: Union[str, dict, list]
+    inline_content: Optional[Union[str, dict, list]] = None
     metadata: Optional[dict[str, Union[str, int, float, bool]]] = None
+    tenant_id: str
+    storage_url: Optional[str] = None
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = Field(None, ge=0)
+    schema_url: Optional[str] = None
+    created_by_agent_id: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def validate_content_present(self) -> "Artifact":
+        """Validate that at least one of inline_content or storage_url is set.
+
+        Raises:
+            ValueError: If both inline_content and storage_url are None
+        """
+        if self.inline_content is None and self.storage_url is None:
+            raise ValueError("Artifact must have at least one of inline_content or storage_url")
+        return self

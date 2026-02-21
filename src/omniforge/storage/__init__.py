@@ -14,8 +14,10 @@ for storing tasks and agents with support for different storage backends.
 
 __all__ = [
     "AgentRepository",
+    "ArtifactStore",
     "TaskRepository",
     "InMemoryAgentRepository",
+    "InMemoryArtifactRepository",
     "InMemoryTaskRepository",
 ]
 
@@ -26,6 +28,10 @@ def __getattr__(name: str):
         from omniforge.storage.base import AgentRepository
 
         return AgentRepository
+    elif name == "ArtifactStore":
+        from omniforge.storage.base import ArtifactStore
+
+        return ArtifactStore
     elif name == "TaskRepository":
         from omniforge.storage.base import TaskRepository
 
@@ -34,6 +40,10 @@ def __getattr__(name: str):
         from omniforge.storage.memory import InMemoryAgentRepository
 
         return InMemoryAgentRepository
+    elif name == "InMemoryArtifactRepository":
+        from omniforge.storage.memory import InMemoryArtifactRepository
+
+        return InMemoryArtifactRepository
     elif name == "InMemoryTaskRepository":
         from omniforge.storage.memory import InMemoryTaskRepository
 

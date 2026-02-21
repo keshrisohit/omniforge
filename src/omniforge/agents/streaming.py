@@ -111,9 +111,10 @@ def format_artifact_event(event: TaskArtifactEvent) -> str:
         >>> from omniforge.agents.models import Artifact
         >>> artifact = Artifact(
         ...     id="art-1",
-        ...     type="document",
+        ...     type=ArtifactType.DOCUMENT,
         ...     title="Result",
-        ...     content="data"
+        ...     inline_content="data",
+        ...     tenant_id="test-tenant",
         ... )
         >>> event = TaskArtifactEvent(
         ...     task_id="task-123",
