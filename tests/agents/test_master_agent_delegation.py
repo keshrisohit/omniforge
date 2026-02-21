@@ -58,6 +58,30 @@ def agent(registry: AgentRegistry) -> MasterAgent:
     return MasterAgent(agent_registry=registry)
 
 
+class TestMasterAgentInit:
+    """Smoke tests for MasterAgent initialisation to catch missing attributes."""
+
+    def test_init_without_registry(self) -> None:
+        agent = MasterAgent()
+        assert agent._delegated_agent is None
+        assert agent._last_delegation_error is None
+        assert agent._mcp_initialized is False
+        assert agent._mcp_manager is None
+
+    def test_init_with_registry(self, registry: AgentRegistry) -> None:
+        agent = MasterAgent(agent_registry=registry)
+        assert agent._mcp_initialized is False
+        assert agent._mcp_manager is None
+
+    @pytest.mark.asyncio
+    async def test_ensure_mcp_initialized_is_callable(self) -> None:
+        """_ensure_mcp_initialized must not raise NameError or AttributeError."""
+        agent = MasterAgent()
+        # Runs without error (no MCP config set, so it's a no-op)
+        await agent._ensure_mcp_initialized()
+        assert agent._mcp_initialized is True
+
+
 class TestDelegateToAgentTool:
     """Tests for the DelegateToAgentTool registration and behaviour."""
 
