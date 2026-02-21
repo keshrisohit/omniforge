@@ -172,6 +172,9 @@ and can be used for any automation task.
         self._delegated_agent: Optional[Any] = None
         # Failure context from the last delegation — injected into the next ReAct turn
         self._last_delegation_error: Optional[str] = None
+        # MCP lazy-init state
+        self._mcp_initialized: bool = False
+        self._mcp_manager: Optional[Any] = None
 
         # Build registry: default tools (includes llm) + platform tools
         from omniforge.llm.config import load_config_from_env

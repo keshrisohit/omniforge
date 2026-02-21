@@ -48,6 +48,9 @@ dmypy.json
 .env.*
 *.env
 
+# MCP server configs (contain API keys)
+mcp_servers.json
+
 # Virtual environments (extended)
 .venv/
 

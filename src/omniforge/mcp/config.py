@@ -34,11 +34,13 @@ class MCPServerConfig(BaseModel):
         if transport == "stdio":
             if not self.command:
                 raise ValueError("'command' is required for stdio transport")
-        elif transport in ("http", "streamable_http", "streamable-http"):
+        elif transport in ("http", "streamable_http", "streamable-http", "sse"):
             if not self.url:
-                raise ValueError("'url' is required for http transport")
+                raise ValueError(f"'url' is required for {transport} transport")
         else:
-            raise ValueError(f"Unsupported transport '{self.transport}'. Use 'stdio' or 'http'.")
+            raise ValueError(
+                f"Unsupported transport '{self.transport}'. Use 'stdio', 'http', or 'sse'."
+            )
         return self
 
 

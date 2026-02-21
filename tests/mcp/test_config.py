@@ -43,7 +43,8 @@ class TestMCPServerConfig:
 
 
 class TestLoadMcpConfig:
-    def test_empty_returns_empty_config(self) -> None:
+    def test_empty_returns_empty_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OMNIFORGE_MCP_CONFIG", raising=False)
         cfg = load_mcp_config()
         assert isinstance(cfg, MCPConfig)
         assert cfg.servers == {}
