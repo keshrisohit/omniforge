@@ -11,9 +11,12 @@ stores the sub-agent reference and forwards all subsequent messages to it
 until that sub-agent signals completion or the user cancels.
 """
 
+import logging
 from datetime import datetime
 from typing import Any, AsyncIterator, Optional
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 from omniforge.agents.autonomous_simple import SimpleAutonomousAgent
 from omniforge.agents.events import (
