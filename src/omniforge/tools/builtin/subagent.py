@@ -175,6 +175,8 @@ class SubAgentTool(BaseTool):
                 user_id=context.user_id or "system",
                 parent_task_id=context.task_id,
                 conversation_id=context.conversation_id,
+                # Propagate trace_id; fall back to parent task_id if not yet set (root case)
+                trace_id=context.trace_id or context.task_id,
             )
 
             # Process task with timeout

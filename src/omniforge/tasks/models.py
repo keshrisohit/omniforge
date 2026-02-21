@@ -117,6 +117,8 @@ class Task(BaseModel):
         tenant_id: Multi-tenancy identifier
         user_id: ID of the user who created the task
         parent_task_id: Optional ID of parent task for subtasks
+        conversation_id: Optional ID linking this task to a multi-turn conversation
+        trace_id: Trace ID propagated across the full delegation chain
     """
 
     id: str = Field(..., min_length=1, max_length=255)
@@ -130,6 +132,8 @@ class Task(BaseModel):
     tenant_id: Optional[str] = Field(None, max_length=255)
     user_id: str = Field(..., min_length=1, max_length=255)
     parent_task_id: Optional[str] = Field(None, max_length=255)
+    conversation_id: Optional[str] = Field(None, max_length=255)
+    trace_id: Optional[str] = Field(None, max_length=255)
 
     @field_validator("state")
     @classmethod
@@ -190,15 +194,14 @@ class TaskCreateRequest(BaseModel):
     """Request model for creating a new task.
 
     Attributes:
+        agent_id: ID of the agent to handle this task
         message_parts: Initial message parts from the user
         tenant_id: Multi-tenancy identifier
         user_id: ID of the user creating the task
         parent_task_id: Optional ID of parent task for subtasks
-
-    Note:
-        agent_id is passed as a path parameter, not in the request body
     """
 
+    agent_id: str = Field(..., min_length=1, max_length=255)
     message_parts: list[MessagePart]
     tenant_id: str = Field(..., min_length=1, max_length=255)
     user_id: str = Field(..., min_length=1, max_length=255)

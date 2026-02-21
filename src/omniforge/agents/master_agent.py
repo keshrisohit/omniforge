@@ -221,6 +221,26 @@ and can be used for any automation task.
         """
         self._delegated_agent = agent
 
+    async def _ensure_mcp_initialized(self) -> None:
+        """Lazily connect to MCP servers on the first task.
+
+        Reads OMNIFORGE_MCP_CONFIG and registers any configured server tools
+        into this agent's tool registry. Failed servers are logged and skipped.
+        """
+        if self._mcp_initialized:
+            return
+        self._mcp_initialized = True  # set before await to prevent concurrent double-init
+        try:
+            from omniforge.tools.setup import setup_mcp_tools
+
+            self._mcp_manager = await setup_mcp_tools(self._tool_registry)
+            if self._mcp_manager:
+                logger.info(
+                    "MCP servers connected: %s", self._mcp_manager.connected_servers
+                )
+        except Exception as exc:
+            logger.warning("MCP initialization failed (continuing without MCP): %s", exc)
+
     async def process_task(self, task: Task) -> AsyncIterator[TaskEvent]:  # type: ignore[override]
         """Process a task with stateful delegation support.
 
@@ -309,6 +329,13 @@ and can be used for any automation task.
             return
 
         # ── Normal ReAct loop ─────────────────────────────────────────────
+        # Connect to MCP servers on first task (no-op on subsequent calls)
+        await self._ensure_mcp_initialized()
+
+        # Set root trace_id on first entry (when not already set by a parent)
+        if task.trace_id is None:
+            task = task.model_copy(update={"trace_id": task.id})
+
         # Inject prior delegation failure into the task history so the LLM
         # can reason about what went wrong and course-correct
         if self._last_delegation_error is not None:
@@ -386,4 +413,5 @@ and can be used for any automation task.
             user_id=parent_task.user_id,
             tenant_id=parent_task.tenant_id,
             conversation_id=parent_task.conversation_id,
+            trace_id=parent_task.trace_id,
         )

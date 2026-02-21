@@ -249,6 +249,9 @@ class ReasoningEngine:
             agent_id=self._task.get("agent_id", "unknown"),
             tenant_id=self._task.get("tenant_id"),
             chain_id=self._task.get("chain_id"),
+            user_id=self._task.get("user_id"),
+            conversation_id=self._task.get("conversation_id"),
+            trace_id=self._task.get("trace_id"),
             max_tokens=self._task.get("max_tokens"),
             max_cost_usd=self._task.get("max_cost_usd"),
         )

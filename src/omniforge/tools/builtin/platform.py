@@ -631,10 +631,14 @@ def register_platform_tools(
         >>> "create_agent" in registry.list_tools()
         True
     """
+    from omniforge.tools.builtin.context import ReadContextTool, WriteContextTool
+
     tool_registry.register(ListAgentsTool(agent_registry))
     tool_registry.register(ListSkillsTool())
     tool_registry.register(CreateAgentTool(agent_registry, tenant_id))
     tool_registry.register(AddSkillToAgentTool(agent_registry))
+    tool_registry.register(WriteContextTool())
+    tool_registry.register(ReadContextTool())
     if on_delegate is not None:
         tool_registry.register(
             DelegateToAgentTool(

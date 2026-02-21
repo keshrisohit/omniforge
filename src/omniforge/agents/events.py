@@ -20,10 +20,12 @@ class BaseTaskEvent(BaseModel):
     Attributes:
         task_id: ID of the task this event belongs to
         timestamp: When the event occurred
+        trace_id: Trace ID propagated across the full delegation chain
     """
 
     task_id: str = Field(..., min_length=1, max_length=255)
     timestamp: datetime
+    trace_id: Optional[str] = None
 
 
 class TaskStatusEvent(BaseTaskEvent):

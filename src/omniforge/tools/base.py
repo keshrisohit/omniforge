@@ -169,6 +169,13 @@ class ToolCallContext(BaseModel):
     chain_id: Optional[str] = Field(
         default=None, description="ID of the reasoning chain this call belongs to"
     )
+    user_id: Optional[str] = Field(default=None, description="ID of the user who owns the task")
+    conversation_id: Optional[str] = Field(
+        default=None, description="ID of the conversation this task belongs to"
+    )
+    trace_id: Optional[str] = Field(
+        default=None, description="Trace ID propagated across the full delegation chain"
+    )
     max_tokens: Optional[int] = Field(
         default=None, ge=1, description="Maximum tokens allowed for this call"
     )
