@@ -155,6 +155,23 @@ Before setting "is_final": true, verify ALL of these:
 
 If ANY checkbox is unchecked → set "is_final": false and use another tool instead.
 
+## When to Stop and Report Failure
+
+If you are stuck, do NOT keep retrying the same failing approach. Follow this rule:
+
+- If the **same tool fails twice with the same error** → stop retrying it. Try a different tool or approach.
+- If you have tried **3 or more different approaches** and none succeeded → set `is_final: true` and explain in `final_answer` what you attempted and why it failed.
+- If a tool returns an error observation (e.g. `"success": false`, non-zero exit code, exception message) → treat it as a signal to change strategy, not to retry identically.
+
+**Example: Reporting failure after exhausting options**
+```json
+{{{{
+  "thought": "I tried bash with python, then with pip install, then read the file directly. All failed due to missing dependencies. I cannot complete this task with the available tools.",
+  "final_answer": "I was unable to complete the task. I attempted: (1) running the script directly — failed with ModuleNotFoundError, (2) installing dependencies — failed with permission error, (3) reading the file to inspect manually — file not found. Please ensure the environment has the required packages installed.",
+  "is_final": true
+}}}}
+```
+
 ## Anti-Patterns (NEVER DO THIS)
 ❌ Setting is_final=true without calling any tools
 ❌ Providing final_answer without tool observations
@@ -162,6 +179,7 @@ If ANY checkbox is unchecked → set "is_final": false and use another tool inst
 ❌ Including text before or after the JSON
 ❌ Adding extra fields to the JSON (like "code", "python_code", "output", etc)
 ❌ Using wrong field names (must be exactly: "thought", "action", "action_input", "final_answer", "is_final")
+❌ Retrying the exact same failing tool call more than twice
 """  # noqa: E501
 # fmt: on  # Re-enable black formatting
 
@@ -259,14 +277,16 @@ TOOL_CALLING_EXAMPLES = """## Tool Calling Format Examples  # noqa: E501
 }}}}
 ```
 
-**bash Tool (command as STRING):**
+**bash Tool:**
 ```json
 {{{{
   "tool_name": "bash",
-  "arguments": "cd /home/user/.claude/skills/my-skill && python scripts/run.py"
+  "arguments": {{{{
+    "command": "cd /home/user/.claude/skills/my-skill && python scripts/run.py"
+  }}}}
 }}}}
 ```
-Note: bash tool takes the command as a STRING directly in arguments/action_input, NOT as an object with "command" or "code" keys.  # noqa: E501
+Note: bash tool takes a JSON object with a `"command"` key. Do NOT pass a bare string or use keys like `"code"` or `"cmd"`.  # noqa: E501
 
 **Skill Tool:**
 ```json

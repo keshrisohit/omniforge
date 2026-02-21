@@ -115,9 +115,11 @@ Your response MUST be EXACTLY in one of these two formats - NO other formats are
 {{{{
   "thought": "your reasoning here",
   "action": "tool_name_from_above_list",
-  "action_input": "command_string_for_bash" OR {{{{"param": "value"}}}},
+  "action_input": {{{{"param": "value"}}}},
   "is_final": false
 }}}}
+
+For the bash tool specifically, always use: `"action_input": {{{{"command": "your command here"}}}}`
 
 **Final Answer Format:**
 {{{{
