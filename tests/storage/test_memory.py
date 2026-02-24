@@ -284,6 +284,138 @@ class TestInMemoryTaskRepository:
         assert tasks[0].id == "task-1"
         assert tasks[1].id == "task-2"
 
+    @pytest.mark.asyncio
+    async def test_list_by_tenant(self, repo: InMemoryTaskRepository) -> None:
+        """list_by_tenant() should return only tasks for the given tenant."""
+        now = datetime.now(timezone.utc)
+
+        def make(task_id: str, tenant: str) -> Task:
+            return Task(
+                id=task_id,
+                agent_id="agent-1",
+                state=TaskState.SUBMITTED,
+                messages=[
+                    TaskMessage(
+                        id="msg-1",
+                        role="user",
+                        parts=[TextPart(text="Hi")],
+                        created_at=now,
+                    )
+                ],
+                created_at=now,
+                updated_at=now,
+                tenant_id=tenant,
+                user_id="user-1",
+            )
+
+        await repo.save(make("t1", "tenant-a"))
+        await repo.save(make("t2", "tenant-a"))
+        await repo.save(make("t3", "tenant-b"))
+
+        result_a = await repo.list_by_tenant("tenant-a")
+        assert len(result_a) == 2
+        assert all(t.tenant_id == "tenant-a" for t in result_a)
+
+        result_b = await repo.list_by_tenant("tenant-b")
+        assert len(result_b) == 1
+        assert result_b[0].id == "t3"
+
+    @pytest.mark.asyncio
+    async def test_list_by_tenant_pagination(self, repo: InMemoryTaskRepository) -> None:
+        """list_by_tenant() should support offset/limit pagination."""
+        from datetime import timedelta
+
+        now = datetime.now(timezone.utc)
+        for i in range(5):
+            t = Task(
+                id=f"t{i}",
+                agent_id="agent-1",
+                state=TaskState.SUBMITTED,
+                messages=[
+                    TaskMessage(
+                        id=f"msg-{i}",
+                        role="user",
+                        parts=[TextPart(text="Hi")],
+                        created_at=now,
+                    )
+                ],
+                created_at=now - timedelta(seconds=i),
+                updated_at=now,
+                tenant_id="tenant-1",
+                user_id="user-1",
+            )
+            await repo.save(t)
+
+        page1 = await repo.list_by_tenant("tenant-1", limit=2, offset=0)
+        page2 = await repo.list_by_tenant("tenant-1", limit=2, offset=2)
+        assert len(page1) == 2
+        assert len(page2) == 2
+        assert {t.id for t in page1}.isdisjoint({t.id for t in page2})
+
+    @pytest.mark.asyncio
+    async def test_list_by_skill(self, repo: InMemoryTaskRepository) -> None:
+        """list_by_skill() should filter by tenant AND skill name."""
+        now = datetime.now(timezone.utc)
+
+        def make(task_id: str, tenant: str, skill: str | None) -> Task:
+            return Task(
+                id=task_id,
+                agent_id="agent-1",
+                state=TaskState.SUBMITTED,
+                messages=[
+                    TaskMessage(
+                        id="msg-1",
+                        role="user",
+                        parts=[TextPart(text="Hi")],
+                        created_at=now,
+                    )
+                ],
+                created_at=now,
+                updated_at=now,
+                tenant_id=tenant,
+                user_id="user-1",
+                skill_name=skill,
+            )
+
+        await repo.save(make("t1", "tenant-1", "invoice-extraction"))
+        await repo.save(make("t2", "tenant-1", "invoice-extraction"))
+        await repo.save(make("t3", "tenant-1", "chat"))
+        # Different tenant, same skill — must NOT be returned
+        await repo.save(make("t4", "tenant-2", "invoice-extraction"))
+
+        result = await repo.list_by_skill("tenant-1", "invoice-extraction")
+        assert len(result) == 2
+        assert all(t.skill_name == "invoice-extraction" for t in result)
+        assert all(t.tenant_id == "tenant-1" for t in result)
+
+    @pytest.mark.asyncio
+    async def test_list_by_skill_respects_limit(self, repo: InMemoryTaskRepository) -> None:
+        """list_by_skill() should respect limit parameter."""
+        now = datetime.now(timezone.utc)
+        for i in range(5):
+            t = Task(
+                id=f"t{i}",
+                agent_id="agent-1",
+                state=TaskState.SUBMITTED,
+                messages=[
+                    TaskMessage(
+                        id=f"msg-{i}",
+                        role="user",
+                        parts=[TextPart(text="Hi")],
+                        created_at=now,
+                    )
+                ],
+                created_at=now,
+                updated_at=now,
+                tenant_id="tenant-1",
+                user_id="user-1",
+                skill_name="chat",
+            )
+            await repo.save(t)
+
+        result = await repo.list_by_skill("tenant-1", "chat", limit=3)
+        assert len(result) == 3
+
 
 class TestInMemoryAgentRepository:
     """Tests for InMemoryAgentRepository."""

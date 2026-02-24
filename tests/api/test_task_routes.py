@@ -224,6 +224,9 @@ class TestGetTaskStatus:
         assert "created_at" in data
         assert "updated_at" in data
         assert data["message_count"] == 1
+        assert "skill_name" in data
+        assert "input_summary" in data
+        assert "trace_id" in data
 
         # Cleanup
         await _task_repository.delete(task_id)
@@ -493,6 +496,136 @@ class TestListTasks:
         assert task1_id in task_ids
         assert task2_id in task_ids
 
+        # Verify new fields present
+        for t in tasks:
+            assert "skill_name" in t
+            assert "input_summary" in t
+
         # Cleanup
         await _task_repository.delete(task1_id)
         await _task_repository.delete(task2_id)
+
+
+class TestTenantTaskList:
+    """Tests for the GET /api/v1/tasks tenant-scoped endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_list_tenant_tasks_returns_only_tenant_tasks(
+        self, client: TestClient, registered_agent: TestAgent
+    ) -> None:
+        """GET /api/v1/tasks should return only tasks for the current tenant."""
+        from datetime import datetime
+        from uuid import uuid4
+
+        from omniforge.tasks.models import TaskMessage
+
+        now = datetime.utcnow()
+
+        def make(task_id: str, tenant: str, skill: str | None = None) -> Task:
+            return Task(
+                id=task_id,
+                agent_id="test-agent",
+                state=TaskState.COMPLETED,
+                messages=[
+                    TaskMessage(
+                        id=str(uuid4()),
+                        role="user",
+                        parts=[TextPart(text="Hello")],
+                        created_at=now,
+                    )
+                ],
+                created_at=now,
+                updated_at=now,
+                tenant_id=tenant,
+                user_id="user-1",
+                skill_name=skill,
+            )
+
+        t1 = make(str(uuid4()), "tenant-1", skill="chat")
+        t2 = make(str(uuid4()), "tenant-1", skill="invoice-extraction")
+        t3 = make(str(uuid4()), "tenant-2")
+
+        await _task_repository.save(t1)
+        await _task_repository.save(t2)
+        await _task_repository.save(t3)
+
+        # Request with tenant-1 header
+        response = client.get(
+            "/api/v1/tasks",
+            headers={"X-Tenant-ID": "tenant-1"},
+        )
+
+        assert response.status_code == 200
+        tasks = response.json()
+        returned_ids = {t["id"] for t in tasks}
+        assert t1.id in returned_ids
+        assert t2.id in returned_ids
+        assert t3.id not in returned_ids
+
+        # Cleanup
+        await _task_repository.delete(t1.id)
+        await _task_repository.delete(t2.id)
+        await _task_repository.delete(t3.id)
+
+    @pytest.mark.asyncio
+    async def test_list_tenant_tasks_skill_filter(
+        self, client: TestClient, registered_agent: TestAgent
+    ) -> None:
+        """GET /api/v1/tasks?skill_name= should filter by skill."""
+        from datetime import datetime
+        from uuid import uuid4
+
+        from omniforge.tasks.models import TaskMessage
+
+        now = datetime.utcnow()
+
+        def make(task_id: str, skill: str | None) -> Task:
+            return Task(
+                id=task_id,
+                agent_id="test-agent",
+                state=TaskState.COMPLETED,
+                messages=[
+                    TaskMessage(
+                        id=str(uuid4()),
+                        role="user",
+                        parts=[TextPart(text="Hello")],
+                        created_at=now,
+                    )
+                ],
+                created_at=now,
+                updated_at=now,
+                tenant_id="tenant-1",
+                user_id="user-1",
+                skill_name=skill,
+            )
+
+        t1 = make(str(uuid4()), "chat")
+        t2 = make(str(uuid4()), "chat")
+        t3 = make(str(uuid4()), "invoice-extraction")
+
+        await _task_repository.save(t1)
+        await _task_repository.save(t2)
+        await _task_repository.save(t3)
+
+        response = client.get(
+            "/api/v1/tasks?skill_name=chat",
+            headers={"X-Tenant-ID": "tenant-1"},
+        )
+
+        assert response.status_code == 200
+        tasks = response.json()
+        assert len(tasks) == 2
+        assert all(t["skill_name"] == "chat" for t in tasks)
+
+        # Cleanup
+        await _task_repository.delete(t1.id)
+        await _task_repository.delete(t2.id)
+        await _task_repository.delete(t3.id)
+
+    def test_list_tenant_tasks_no_tenant_returns_empty(
+        self, client: TestClient
+    ) -> None:
+        """GET /api/v1/tasks with no tenant should return empty list."""
+        response = client.get("/api/v1/tasks")
+        assert response.status_code == 200
+        assert response.json() == []

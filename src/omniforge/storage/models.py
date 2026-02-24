@@ -331,6 +331,69 @@ class OAuthStateModel(Base):
     __table_args__ = (Index("idx_oauth_state_expires", "expires_at"),)
 
 
+class TaskModel(Base):
+    """ORM model for task persistence.
+
+    Stores tasks with full lifecycle tracking, categorization, and multi-tenancy support.
+
+    Attributes:
+        id: Unique task identifier
+        tenant_id: Tenant identifier (indexed)
+        agent_id: Agent identifier (indexed)
+        user_id: User identifier
+        state: Task lifecycle state
+        skill_name: Skill/category for the task (indexed)
+        input_summary: Brief summary of task input
+        parent_task_id: Optional parent task for subtasks
+        conversation_id: Optional multi-turn conversation ID
+        trace_id: Trace ID propagated across delegation chain
+        messages: Conversation history (JSON)
+        artifacts: Produced artifacts (JSON)
+        error: Error information if failed (JSON)
+        created_at: Creation timestamp
+        updated_at: Last update timestamp
+    """
+
+    __tablename__ = "tasks"
+
+    # Primary key
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+
+    # Identifiers (indexed for queries)
+    tenant_id: Mapped[str] = mapped_column(String(255), nullable=True, index=True)
+    agent_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # State
+    state: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    # Categorization
+    skill_name: Mapped[str] = mapped_column(String(255), nullable=True, index=True)
+    input_summary: Mapped[str] = mapped_column(String(500), nullable=True)
+
+    # Relationships
+    parent_task_id: Mapped[str] = mapped_column(String(255), nullable=True)
+    conversation_id: Mapped[str] = mapped_column(String(255), nullable=True)
+    trace_id: Mapped[str] = mapped_column(String(255), nullable=True)
+
+    # Data (stored as JSON)
+    messages: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    artifacts: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    error: Mapped[dict] = mapped_column(JSON, nullable=True)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    # Composite indexes for common query patterns
+    __table_args__ = (
+        Index("idx_task_tenant_created", "tenant_id", "created_at"),
+        Index("idx_task_tenant_skill", "tenant_id", "skill_name"),
+        Index("idx_task_tenant_state", "tenant_id", "state"),
+        Index("idx_task_agent_tenant", "agent_id", "tenant_id"),
+    )
+
+
 class OAuthCredentialModel(Base):
     """ORM model for OAuth credentials.
 

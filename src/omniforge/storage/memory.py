@@ -117,6 +117,48 @@ class InMemoryTaskRepository:
             child_tasks.sort(key=lambda t: t.created_at)
             return child_tasks[:limit]
 
+    async def list_by_tenant(
+        self, tenant_id: str, limit: int = 100, offset: int = 0
+    ) -> list[Task]:
+        """List tasks for a specific tenant with pagination.
+
+        Args:
+            tenant_id: Tenant identifier to filter by
+            limit: Maximum number of tasks to return (default: 100)
+            offset: Number of tasks to skip (default: 0)
+
+        Returns:
+            List of tasks for the tenant, ordered by created_at desc
+        """
+        async with self._lock:
+            tenant_tasks = [
+                task for task in self._tasks.values() if task.tenant_id == tenant_id
+            ]
+            tenant_tasks.sort(key=lambda t: t.created_at, reverse=True)
+            return tenant_tasks[offset : offset + limit]
+
+    async def list_by_skill(
+        self, tenant_id: str, skill_name: str, limit: int = 100
+    ) -> list[Task]:
+        """List tasks for a specific tenant filtered by skill name.
+
+        Args:
+            tenant_id: Tenant identifier to filter by
+            skill_name: Skill name to filter by
+            limit: Maximum number of tasks to return (default: 100)
+
+        Returns:
+            List of tasks matching tenant and skill name, ordered by created_at desc
+        """
+        async with self._lock:
+            skill_tasks = [
+                task
+                for task in self._tasks.values()
+                if task.tenant_id == tenant_id and task.skill_name == skill_name
+            ]
+            skill_tasks.sort(key=lambda t: t.created_at, reverse=True)
+            return skill_tasks[:limit]
+
 
 class InMemoryAgentRepository:
     """Thread-safe in-memory implementation of AgentRepository.

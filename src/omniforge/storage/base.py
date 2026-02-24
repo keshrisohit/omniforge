@@ -89,6 +89,36 @@ class TaskRepository(Protocol):
         """
         ...
 
+    async def list_by_tenant(
+        self, tenant_id: str, limit: int = 100, offset: int = 0
+    ) -> list[Task]:
+        """List tasks for a specific tenant with pagination.
+
+        Args:
+            tenant_id: Tenant identifier to filter by
+            limit: Maximum number of tasks to return (default: 100)
+            offset: Number of tasks to skip (default: 0)
+
+        Returns:
+            List of tasks for the tenant, ordered by created_at desc
+        """
+        ...
+
+    async def list_by_skill(
+        self, tenant_id: str, skill_name: str, limit: int = 100
+    ) -> list[Task]:
+        """List tasks for a specific tenant filtered by skill name.
+
+        Args:
+            tenant_id: Tenant identifier to filter by
+            skill_name: Skill name to filter by
+            limit: Maximum number of tasks to return (default: 100)
+
+        Returns:
+            List of tasks matching tenant and skill name, ordered by created_at desc
+        """
+        ...
+
 
 class AgentRepository(Protocol):
     """Protocol for agent storage operations.

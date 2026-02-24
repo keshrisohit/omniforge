@@ -134,6 +134,8 @@ class Task(BaseModel):
     parent_task_id: Optional[str] = Field(None, max_length=255)
     conversation_id: Optional[str] = Field(None, max_length=255)
     trace_id: Optional[str] = Field(None, max_length=255)
+    skill_name: Optional[str] = Field(None, max_length=255)
+    input_summary: Optional[str] = Field(None, max_length=500)
 
     @field_validator("state")
     @classmethod
@@ -201,11 +203,12 @@ class TaskCreateRequest(BaseModel):
         parent_task_id: Optional ID of parent task for subtasks
     """
 
-    agent_id: str = Field(..., min_length=1, max_length=255)
+    agent_id: Optional[str] = Field(None, max_length=255)
     message_parts: list[MessagePart]
     tenant_id: str = Field(..., min_length=1, max_length=255)
     user_id: str = Field(..., min_length=1, max_length=255)
     parent_task_id: Optional[str] = Field(None, max_length=255)
+    skill_name: Optional[str] = Field(None, max_length=255)
 
     @field_validator("message_parts")
     @classmethod

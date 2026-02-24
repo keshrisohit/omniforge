@@ -5,20 +5,23 @@ including task creation, status retrieval, message sending, cancellation,
 and listing. Task creation and message sending return Server-Sent Events (SSE).
 """
 
+import os
 from datetime import datetime
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
 from omniforge.agents.base import BaseAgent
 from omniforge.agents.errors import TaskNotFoundError, TaskStateError
 from omniforge.agents.models import TextPart
 from omniforge.agents.registry import AgentRegistry
+from omniforge.api.dependencies import get_current_tenant
 from omniforge.api.routes.agents import _agent_repository
 from omniforge.security.isolation import enforce_agent_isolation, enforce_task_isolation
 from omniforge.storage.base import TaskRepository
+from omniforge.storage.database import Database, DatabaseConfig
 from omniforge.storage.memory import InMemoryTaskRepository
 from omniforge.tasks.models import (
     ChatRequest,
@@ -37,6 +40,9 @@ router = APIRouter(tags=["tasks"])
 # TODO: Replace with persistent storage in production
 _task_repository: TaskRepository = InMemoryTaskRepository()
 
+# Shared database instance for SQL-backed task repository
+_database: Optional[Database] = None
+
 
 def get_agent_registry() -> AgentRegistry:
     """Dependency for getting the agent registry instance.
@@ -54,6 +60,34 @@ def get_task_repository() -> TaskRepository:
         TaskRepository instance
     """
     return _task_repository
+
+
+def get_database() -> Database:
+    """Get or create shared database instance.
+
+    Returns:
+        Database instance
+    """
+    global _database
+    if _database is None:
+        config = DatabaseConfig(
+            url=os.getenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+        )
+        _database = Database(config)
+    return _database
+
+
+async def get_sql_task_repository():
+    """Dependency for getting the SQL-backed task repository.
+
+    Yields:
+        SQLTaskRepository instance backed by a database session
+    """
+    from omniforge.storage.task_repository import SQLTaskRepository
+
+    db = get_database()
+    async with db.session() as session:
+        yield SQLTaskRepository(session)
 
 
 async def _stream_task_events(
@@ -183,6 +217,7 @@ async def create_task(
         tenant_id=body.tenant_id,
         user_id=body.user_id,
         parent_task_id=body.parent_task_id,
+        skill_name=body.skill_name,
     )
 
     # Save task to repository
@@ -371,6 +406,9 @@ async def get_task_status(
         "id": task.id,
         "agent_id": task.agent_id,
         "state": task.state.value,
+        "skill_name": task.skill_name,
+        "input_summary": task.input_summary,
+        "trace_id": task.trace_id,
         "created_at": task.created_at.isoformat(),
         "updated_at": task.updated_at.isoformat(),
         "message_count": len(task.messages),
@@ -580,11 +618,66 @@ async def list_tasks(
     return [
         {
             "id": task.id,
+            "agent_id": task.agent_id,
             "state": task.state.value,
+            "skill_name": task.skill_name,
+            "input_summary": task.input_summary,
             "created_at": task.created_at.isoformat(),
             "updated_at": task.updated_at.isoformat(),
             "message_count": len(task.messages),
             "artifact_count": len(task.artifacts),
+        }
+        for task in tasks
+    ]
+
+
+@router.get("/api/v1/tasks")
+async def list_tenant_tasks(
+    skill_name: Optional[str] = Query(None, max_length=255),
+    state: Optional[str] = Query(None, max_length=50),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    task_repo: TaskRepository = Depends(get_task_repository),
+    tenant_id: Optional[str] = Depends(get_current_tenant),
+) -> list[dict]:
+    """List tasks for the current tenant with optional filtering.
+
+    Tenant is read from request state set by TenantMiddleware.
+
+    Args:
+        skill_name: Optional skill name filter
+        state: Optional state filter
+        limit: Maximum number of tasks to return (default: 100)
+        offset: Number of tasks to skip (default: 0)
+        task_repo: Injected TaskRepository dependency
+        tenant_id: Current tenant ID from middleware
+
+    Returns:
+        List of task summary objects for the tenant
+    """
+    if not tenant_id:
+        return []
+
+    if skill_name:
+        tasks = await task_repo.list_by_skill(tenant_id, skill_name, limit=limit)
+    else:
+        tasks = await task_repo.list_by_tenant(tenant_id, limit=limit, offset=offset)
+
+    # Apply optional state filter
+    if state:
+        tasks = [t for t in tasks if t.state.value == state]
+
+    return [
+        {
+            "id": task.id,
+            "agent_id": task.agent_id,
+            "skill_name": task.skill_name,
+            "input_summary": task.input_summary,
+            "state": task.state.value,
+            "created_at": task.created_at.isoformat(),
+            "updated_at": task.updated_at.isoformat(),
+            "artifact_count": len(task.artifacts),
+            "message_count": len(task.messages),
         }
         for task in tasks
     ]
