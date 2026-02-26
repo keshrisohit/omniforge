@@ -1,7 +1,6 @@
 """Tests for the ReasoningEngine."""
 
-import asyncio
-from typing import Any, AsyncIterator
+from typing import Any
 from unittest.mock import Mock
 from uuid import UUID, uuid4
 
@@ -479,40 +478,3 @@ class TestReasoningEngine:
         assert len(definitions) == 1
         assert definitions[0] == def_tool1
 
-    @pytest.mark.asyncio
-    async def test_execute_reasoning_yields_steps(self, engine: ReasoningEngine) -> None:
-        """execute_reasoning should yield steps as they are created."""
-
-        async def reasoning_func(eng: ReasoningEngine) -> AsyncIterator[ReasoningStep]:
-            """Simple reasoning function that adds steps."""
-            step1 = eng.add_thinking("First thought")
-            yield step1
-            await asyncio.sleep(0.02)
-            step2 = eng.add_thinking("Second thought")
-            yield step2
-
-        steps_yielded = []
-        async for step in engine.execute_reasoning(reasoning_func):
-            steps_yielded.append(step)
-
-        assert len(steps_yielded) == 2
-        assert steps_yielded[0].thinking.content == "First thought"
-        assert steps_yielded[1].thinking.content == "Second thought"
-
-    @pytest.mark.asyncio
-    async def test_execute_reasoning_tracks_new_steps_only(self, engine: ReasoningEngine) -> None:
-        """execute_reasoning should only yield new steps, not existing ones."""
-        # Add a step before execution
-        engine.add_thinking("Pre-existing step")
-
-        async def reasoning_func(eng: ReasoningEngine) -> AsyncIterator[ReasoningStep]:
-            step = eng.add_thinking("New step")
-            yield step
-
-        steps_yielded = []
-        async for step in engine.execute_reasoning(reasoning_func):
-            steps_yielded.append(step)
-
-        # Should only yield the new step
-        assert len(steps_yielded) == 1
-        assert steps_yielded[0].thinking.content == "New step"

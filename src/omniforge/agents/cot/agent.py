@@ -5,6 +5,7 @@ with chain of thought capabilities. All reasoning steps are tracked in a
 ReasoningChain and streamed as events for real-time visibility.
 """
 
+import asyncio
 from abc import abstractmethod
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
@@ -17,7 +18,6 @@ from omniforge.agents.cot.events import (
     ChainCompletedEvent,
     ChainFailedEvent,
     ChainStartedEvent,
-    ReasoningStepEvent,
 )
 from omniforge.agents.events import TaskDoneEvent, TaskEvent, TaskStatusEvent
 from omniforge.agents.models import AgentCapabilities, AgentIdentity, AgentSkill
@@ -91,6 +91,7 @@ class CoTAgent(BaseAgent):
         chain_repository: Optional[Any] = None,  # type: ignore[assignment]
         rate_limiter: Optional[Any] = None,  # type: ignore[assignment]
         cost_tracker: Optional[Any] = None,  # type: ignore[assignment]
+        backend: Optional[Any] = None,
     ) -> None:
         """Initialize CoT agent with reasoning infrastructure.
 
@@ -101,6 +102,7 @@ class CoTAgent(BaseAgent):
             chain_repository: Optional repository for persisting chains (Phase 6)
             rate_limiter: Optional rate limiter for quota enforcement (Phase 5)
             cost_tracker: Optional cost tracker for budget enforcement (Phase 5)
+            backend: Execution backend (defaults to InProcessBackend)
         """
         from omniforge.tools.executor import ToolExecutor
 
@@ -110,6 +112,7 @@ class CoTAgent(BaseAgent):
             registry=self._tool_registry,
             rate_limiter=rate_limiter,
             cost_tracker=cost_tracker,
+            backend=backend,
         )
         self._chain_repository = chain_repository
         self._rate_limiter = rate_limiter
@@ -121,9 +124,9 @@ class CoTAgent(BaseAgent):
         This method orchestrates the complete reasoning lifecycle:
         1. Creates a new ReasoningChain
         2. Emits ChainStartedEvent and TaskStatusEvent(WORKING)
-        3. Creates ReasoningEngine
-        4. Calls the abstract reason() method
-        5. Yields ReasoningStepEvent for each step
+        3. Creates ReasoningEngine with an event queue
+        4. Runs reason() as a background asyncio task
+        5. Drains events from queue in real-time, yielding them as they arrive
         6. On success: persists chain, emits ChainCompletedEvent, TaskDoneEvent(COMPLETED)
         7. On failure: persists chain, emits ChainFailedEvent, TaskDoneEvent(FAILED)
 
@@ -132,10 +135,6 @@ class CoTAgent(BaseAgent):
 
         Yields:
             TaskEvent objects representing reasoning progress and completion
-
-        Raises:
-            Exception: Any exception from reason() is caught, logged to chain, and
-                      converted to failure events
         """
         # Create reasoning chain
         chain = ReasoningChain(
@@ -158,20 +157,42 @@ class CoTAgent(BaseAgent):
             state=TaskState.WORKING,
         )
 
+        # CoTAgent owns the queue — it creates it and passes it to the engine.
+        # The engine and anything it calls (tools, sub-agents) publish to this queue;
+        # CoTAgent is the sole consumer draining it.
+        event_queue: asyncio.Queue = asyncio.Queue()
+
+        # Create reasoning engine, injecting the caller-owned queue
+        engine = ReasoningEngine(
+            chain=chain,
+            executor=self._executor,
+            task=task.model_dump(),
+            event_queue=event_queue,
+        )
+
+        # Sentinel object signals reason() completion
+        _done = object()
+
+        async def _run_reason() -> str:
+            try:
+                return await self.reason(task, engine)
+            finally:
+                # Always signal completion, even on exception
+                event_queue.put_nowait(_done)
+
+        # Run reason() as background task so we can drain the queue concurrently
+        reason_task = asyncio.create_task(_run_reason())
+
+        # Stream events as they arrive from the engine queue
+        while True:
+            item = await event_queue.get()
+            if item is _done:
+                break
+            yield item  # ReasoningStepEvent or forwarded TaskMessageEvent from sub-agents
+
         try:
-            # Create reasoning engine
-            engine = ReasoningEngine(
-                chain=chain,
-                executor=self._executor,
-                task=task.model_dump(),
-            )
-
-            # Call reason() to perform agent-specific reasoning
-            final_answer = await self.reason(task, engine)
-
-            # Yield reasoning step events for all steps in the chain
-            async for event in self._reason_with_events(task, chain):
-                yield event
+            # Get result (or re-raise any exception from reason())
+            final_answer = await reason_task
 
             # Emit message event with final answer
             if final_answer:
@@ -231,29 +252,6 @@ class CoTAgent(BaseAgent):
                 task_id=task.id,
                 timestamp=datetime.utcnow(),
                 final_state=TaskState.FAILED,
-            )
-
-    async def _reason_with_events(
-        self, task: Task, chain: ReasoningChain
-    ) -> AsyncIterator[TaskEvent]:
-        """Yield ReasoningStepEvent for each step in the chain.
-
-        This method yields events for all steps that were added to the chain
-        during the reason() execution.
-
-        Args:
-            task: The task being processed
-            chain: The reasoning chain containing all steps
-
-        Yields:
-            ReasoningStepEvent for each step in the chain
-        """
-        for step in chain.steps:
-            yield ReasoningStepEvent(
-                task_id=task.id,
-                timestamp=datetime.utcnow(),
-                chain_id=str(chain.id),
-                step=step,
             )
 
     @abstractmethod

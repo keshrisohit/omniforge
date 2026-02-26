@@ -40,6 +40,11 @@ from omniforge.tools.builtin.platform import (
     read_skill_meta,
     register_platform_tools,
 )
+from omniforge.tools.builtin.artifact import (
+    FetchArtifactTool,
+    StoreArtifactTool,
+    register_artifact_tools,
+)
 from omniforge.tools.builtin.write import WriteTool
 
 __all__ = [
@@ -75,4 +80,8 @@ __all__ = [
     "list_all_skills",
     "read_skill_meta",
     "make_agent_id",
+    # Artifact storage tools
+    "StoreArtifactTool",
+    "FetchArtifactTool",
+    "register_artifact_tools",
 ]

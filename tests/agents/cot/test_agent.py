@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from omniforge.agents.cot.agent import CoTAgent
-from omniforge.agents.cot.chain import ChainStatus, ReasoningChain, ReasoningStep, StepType
+from omniforge.agents.cot.chain import ChainStatus, ReasoningChain
 from omniforge.agents.cot.engine import ReasoningEngine
 from omniforge.agents.cot.events import (
     ChainCompletedEvent,
@@ -268,46 +268,6 @@ async def test_chain_persistence_on_failure(tool_registry: ToolRegistry, sample_
     saved_chain = mock_repository.save.call_args[0][0]
     assert isinstance(saved_chain, ReasoningChain)
     assert saved_chain.status == ChainStatus.FAILED
-
-
-@pytest.mark.asyncio
-async def test_reason_with_events_yields_all_steps(
-    tool_registry: ToolRegistry, sample_task: Task
-) -> None:
-    """Test that _reason_with_events yields events for all steps."""
-    agent = SimpleCoTAgent(tool_registry=tool_registry)
-
-    # Create a chain with multiple steps
-    chain = ReasoningChain(
-        task_id=sample_task.id,
-        agent_id=str(agent._id),
-        status=ChainStatus.RUNNING,
-        steps=[
-            ReasoningStep(
-                step_number=1,
-                type=StepType.THINKING,
-                timestamp=datetime.utcnow(),
-                thinking={"content": "Step 1", "confidence": 0.9},
-            ),
-            ReasoningStep(
-                step_number=2,
-                type=StepType.THINKING,
-                timestamp=datetime.utcnow(),
-                thinking={"content": "Step 2", "confidence": 0.8},
-            ),
-        ],
-    )
-
-    # Collect events
-    events = []
-    async for event in agent._reason_with_events(sample_task, chain):
-        events.append(event)
-
-    # Verify all steps yielded as events
-    assert len(events) == 2
-    assert all(isinstance(e, ReasoningStepEvent) for e in events)
-    assert events[0].step.step_number == 1
-    assert events[1].step.step_number == 2
 
 
 @pytest.mark.asyncio

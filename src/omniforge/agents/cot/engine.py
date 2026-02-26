@@ -5,7 +5,8 @@ build reasoning chains, and manage chain state during task execution.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
 
 from omniforge.agents.cot.chain import (
@@ -17,6 +18,7 @@ from omniforge.agents.cot.chain import (
     VisibilityConfig,
     VisibilityLevel,
 )
+from omniforge.agents.cot.events import ReasoningStepEvent
 from omniforge.tools.base import ToolCallContext, ToolDefinition, ToolResult
 
 if TYPE_CHECKING:
@@ -98,6 +100,7 @@ class ReasoningEngine:
         executor: "ToolExecutor",
         task: dict[str, Any],
         default_llm_model: str = "claude-sonnet-4",
+        event_queue: Optional[asyncio.Queue] = None,
     ) -> None:
         """Initialize the reasoning engine.
 
@@ -106,11 +109,15 @@ class ReasoningEngine:
             executor: Tool executor for executing tools and LLM calls
             task: Task information dictionary (must contain 'id' and 'agent_id')
             default_llm_model: Default LLM model to use for call_llm()
+            event_queue: Queue owned by the caller for real-time event streaming.
+                         If not provided, a local queue is created (events are
+                         still emitted but no external consumer will drain them).
         """
         self._chain = chain
         self._executor = executor
         self._task = task
         self._default_llm_model = default_llm_model
+        self._event_queue: asyncio.Queue = event_queue if event_queue is not None else asyncio.Queue()
 
     @property
     def chain(self) -> ReasoningChain:
@@ -146,6 +153,14 @@ class ReasoningEngine:
             thinking=ThinkingInfo(content=thought, confidence=confidence),
         )
         self._chain.add_step(step)
+        self._event_queue.put_nowait(
+            ReasoningStepEvent(
+                task_id=self._task.get("id", "unknown"),
+                timestamp=datetime.utcnow(),
+                chain_id=str(self._chain.id),
+                step=step,
+            )
+        )
         return step
 
     def add_synthesis(self, conclusion: str, sources: list[str]) -> ReasoningStep:
@@ -169,6 +184,14 @@ class ReasoningEngine:
             synthesis=SynthesisInfo(content=conclusion, sources=source_uuids),
         )
         self._chain.add_step(step)
+        self._event_queue.put_nowait(
+            ReasoningStepEvent(
+                task_id=self._task.get("id", "unknown"),
+                timestamp=datetime.utcnow(),
+                chain_id=str(self._chain.id),
+                step=step,
+            )
+        )
         return step
 
     async def call_llm(
@@ -254,6 +277,7 @@ class ReasoningEngine:
             trace_id=self._task.get("trace_id"),
             max_tokens=self._task.get("max_tokens"),
             max_cost_usd=self._task.get("max_cost_usd"),
+            event_queue=self._event_queue,
         )
 
         # Execute tool through executor (adds steps to chain)
@@ -270,6 +294,24 @@ class ReasoningEngine:
         if visibility is not None:
             call_step.visibility = VisibilityConfig(level=visibility)
             result_step.visibility = VisibilityConfig(level=visibility)
+
+        # Publish tool call and result steps to the event queue for real-time streaming
+        self._event_queue.put_nowait(
+            ReasoningStepEvent(
+                task_id=self._task.get("id", "unknown"),
+                timestamp=datetime.utcnow(),
+                chain_id=str(self._chain.id),
+                step=call_step,
+            )
+        )
+        self._event_queue.put_nowait(
+            ReasoningStepEvent(
+                task_id=self._task.get("id", "unknown"),
+                timestamp=datetime.utcnow(),
+                chain_id=str(self._chain.id),
+                step=result_step,
+            )
+        )
 
         return ToolCallResult(result=result, call_step=call_step, result_step=result_step)
 
@@ -295,84 +337,3 @@ class ReasoningEngine:
 
         return definitions
 
-    async def execute_reasoning(
-        self, reasoning_func: Callable[["ReasoningEngine"], AsyncIterator[ReasoningStep]]
-    ) -> AsyncIterator[ReasoningStep]:
-        """Execute a reasoning function and yield steps as they're created.
-
-        This async generator wraps a reasoning function and yields steps as they
-        are added to the chain. Useful for streaming reasoning to clients.
-
-        Args:
-            reasoning_func: Async generator function that takes this engine
-                          and yields reasoning steps
-
-        Yields:
-            ReasoningStep objects as they are created during reasoning
-
-        Example:
-            async def my_reasoning(engine: ReasoningEngine):
-                engine.add_thinking("Starting analysis...")
-                result = await engine.call_llm(prompt="Analyze this...")
-                engine.add_synthesis("Conclusion", [result.step_id])
-
-            async for step in engine.execute_reasoning(my_reasoning):
-                print(f"New step: {step.type}")
-        """
-        # Track initial step count
-        initial_step_count = len(self._chain.steps)
-        steps_yielded = 0
-
-        # Create a queue for new steps
-        step_queue: asyncio.Queue[Optional[ReasoningStep]] = asyncio.Queue()
-        execution_complete = False
-
-        # Create a polling task that watches for new steps
-        async def poll_for_steps() -> None:
-            """Poll the chain for new steps and add them to the queue."""
-            nonlocal steps_yielded
-            while not execution_complete:
-                current_count = len(self._chain.steps)
-                expected_count = initial_step_count + steps_yielded
-                if current_count > expected_count:
-                    # New steps were added
-                    for i in range(expected_count, current_count):
-                        await step_queue.put(self._chain.steps[i])
-                        steps_yielded += 1
-                await asyncio.sleep(0.001)  # Small delay to avoid busy waiting
-
-        # Create a task to execute the reasoning function
-        async def execute_and_signal() -> None:
-            """Execute the reasoning function and signal completion."""
-            nonlocal execution_complete
-            async for step in reasoning_func(self):
-                # The function already adds steps to chain, just continue
-                pass
-            # Give polling loop a chance to catch final steps
-            await asyncio.sleep(0.01)
-            execution_complete = True
-            # Signal completion
-            await step_queue.put(None)
-
-        # Start both tasks
-        polling_task = asyncio.create_task(poll_for_steps())
-        execution_task = asyncio.create_task(execute_and_signal())
-
-        try:
-            # Yield steps as they arrive in the queue
-            while True:
-                step = await step_queue.get()
-                if step is None:
-                    # Completion signal received
-                    break
-                yield step
-
-            # Wait for execution to complete
-            await execution_task
-        finally:
-            # Clean up polling task
-            polling_task.cancel()
-            try:
-                await polling_task
-            except asyncio.CancelledError:
-                pass

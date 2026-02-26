@@ -27,19 +27,29 @@ pip install -e ".[dev]"
 ```
 
 ### Testing
+
+**Default: always run fast tests. Only run slow/full tests when explicitly needed.**
+
 ```bash
-# Run all tests with coverage
-pytest
+# Fast tests — unit tests only, no integration/docker/eval (~1 min) ← USE THIS BY DEFAULT
+make test
+
+# Full test suite — all tests including integration (~4 min)
+make test-full
+
+# Full test suite with coverage report
+make test-cov
 
 # Run specific test file
-pytest tests/test_<module>.py
+pytest tests/test_<module>.py --no-cov
 
 # Run specific test function
-pytest tests/test_<module>.py::test_<function>
-
-# Run without coverage report
-pytest --no-cov
+pytest tests/test_<module>.py::test_<function> --no-cov
 ```
+
+**Test categories:**
+- **Fast (default):** unit tests in `tests/` excluding `tests/integration/`, no `docker`/`eval` markers
+- **Slow (explicit only):** `tests/integration/` — requires running services (Docker, real DBs, OAuth)
 
 ### Code Quality
 ```bash
@@ -164,6 +174,6 @@ This structured approach ensures clear requirements, solid architecture, and mai
 **Always ask for confirmation after each spec, plan, review, task and implement step to ensure that the sub-agent is following the workflow.**
 **Always ask questions, call out tradeoffs of selected approach and brainstorm first before getting deep into implementation.**
 
-**MUST Do - Run and validate all the testcases after evey changes and do a git commit of the feature after each feature development.**
+**MUST Do - Run `make test` (fast tests) after every change to validate. Only run `make test-full` when integration behavior is affected. Do a git commit after each feature development.**
 
 **Do not create unwanted documents in the project. Also dont explain everything in the documents.**

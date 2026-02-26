@@ -10,6 +10,8 @@ import re
 import time
 from typing import Any, Callable, Optional
 
+from omniforge.agents.errors import AgentNotFoundError
+
 from omniforge.tools.base import (
     BaseTool,
     ParameterType,
@@ -571,8 +573,14 @@ class DelegateToAgentTool(BaseTool):
         if agent is None and self._registry is not None:
             try:
                 agent = await self._registry.get(agent_id)
-            except Exception:
-                pass
+            except AgentNotFoundError:
+                pass  # expected: agent not registered, handled below
+            except Exception as e:
+                return ToolResult(
+                    success=False,
+                    error=f"Registry error looking up agent '{agent_id}': {str(e)}",
+                    duration_ms=int((time.time() - start) * 1000),
+                )
 
         if agent is None:
             return ToolResult(

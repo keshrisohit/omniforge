@@ -41,6 +41,14 @@ from omniforge.tools.registry import ToolRegistry
 
 _CANCEL_WORDS = frozenset({"cancel", "exit", "quit", "stop", "start over", "reset", "done"})
 
+_RETURN_CLASSIFICATION_PROMPT = """\
+The user is currently talking to a sub-agent. Does the following message indicate that \
+the user wants to stop the sub-agent and return to the main/master assistant?
+
+Message: "{message}"
+
+Reply with ONLY the single word YES or NO."""
+
 
 class MasterAgent(SimpleAutonomousAgent):
     """Master Agent - Central orchestrator for the OmniForge platform.
@@ -100,27 +108,28 @@ You help users manage their AI agent platform through these tools:
 - `create_agent` — build and register a new agent (auto-loads ALL library skills)
 - `add_skill_to_agent` — explicitly tag an existing agent with a specific skill
 - `delegate_to_agent` — hand off the conversation to a specific agent
+- `store_artifact` — persist skill output as a named, typed artifact (when available)
+- `fetch_artifact` — retrieve a previously stored artifact by ID (when available)
+
+## Intent Disambiguation — Read This First
+
+Before deciding which rule to apply, identify what the user actually wants:
+
+| User intent | Correct action |
+|---|---|
+| "create / build / make an agent" | → create_agent rule |
+| "list / show my agents" | → list_agents rule |
+| "list / show skills" | → list_skills rule |
+| "add / assign / attach a skill to my agent" | → add_skill_to_agent rule |
+| "talk to / use / switch to agent X" | → delegate_to_agent rule |
+| "write / author / build a new custom skill from scratch" | → skill-author rule |
+| anything about what OmniForge can do | → explain platform |
+
+CRITICAL: Do NOT route to the skill-creation-assistant just because the user \
+mentions the word "skill". Only delegate there when the user explicitly wants to \
+author brand-new SKILL.md code that does not yet exist in the library.
 
 ## Decision Rules — Follow These Exactly
-
-### When user wants to CREATE an agent:
-1. Call `list_agents` first to check for duplicates by name or purpose.
-2. If a similar agent already exists, tell the user and ask if they want to proceed anyway.
-3. If no duplicate, call `create_agent` with:
-   - `name`: Clear, descriptive name (e.g. "Customer Outreach Agent", not "agent1")
-   - `purpose`: One-sentence description of what this agent does
-   - `capabilities`: Comma-separated list of skills/features the user mentioned
-4. Report the created agent's ID and confirm how many skills were loaded.
-
-### When user wants to CREATE a SKILL (new code/behaviour):
-- Call `delegate_to_agent` with `agent_id="skill-creation-assistant"`.
-- Do NOT try to create the skill yourself — the Skill Creation Assistant will \
-guide the user through a multi-step process.
-
-### When user wants to TALK TO or USE a specific agent:
-- Call `list_agents` to find the agent's ID.
-- Call `delegate_to_agent` with that agent's ID.
-- The user's subsequent messages will be handled by that agent.
 
 ### When user wants to LIST agents:
 - Call `list_agents` and present results in a readable format.
@@ -136,13 +145,57 @@ guide the user through a multi-step process.
 3. Call `add_skill_to_agent` with both IDs.
 4. Confirm the assignment was successful.
 
+### When user wants to CREATE an agent:
+1. Call `list_agents` first to check for duplicates by name or purpose.
+2. If a similar agent already exists, tell the user and ask if they want to proceed anyway.
+3. If no duplicate, call `create_agent` with:
+   - `name`: Clear, descriptive name (e.g. "Customer Outreach Agent", not "agent1")
+   - `purpose`: One-sentence description of what this agent does
+   - `capabilities`: Comma-separated list of skills/features the user mentioned
+4. Report the created agent's ID and confirm how many skills were loaded.
+
+### When user wants to TALK TO or USE a specific agent:
+- Call `list_agents` to find the agent's ID.
+- Call `delegate_to_agent` with that agent's ID.
+- IMMEDIATELY after calling delegate_to_agent, respond with is_final=true and a \
+brief message like "You are now connected to [agent name]. Your message will be \
+handled by them."
+- Do NOT call any other tools after delegate_to_agent. Stop immediately.
+
+### When you receive context that a delegation completed successfully:
+- Acknowledge what was accomplished in one sentence.
+- Ask the user "What would you like to do next?"
+- Do NOT re-delegate to the same agent unless the user explicitly asks again.
+
+### When user wants to AUTHOR a brand-new custom skill (new SKILL.md code):
+Only apply this rule when the user explicitly wants to write/create new skill code \
+that does not exist yet — NOT when they want to add an existing skill to an agent.
+1. Call `list_skills` first to check if a similar skill already exists.
+2. If a matching skill exists, tell the user and ask if they want it added to an agent instead.
+3. Only if no existing skill covers the use case, call `delegate_to_agent` \
+with `agent_id="skill-creation-assistant"`.
+4. Do NOT try to create the skill yourself — the Skill Creation Assistant will \
+guide the user through a multi-step process.
+
+### After a skill returns data worth keeping:
+- If the result should be saved for future retrieval, call `store_artifact` with:
+  - `type`: one of document, dataset, code, image, structured
+  - `title`: a clear descriptive name
+  - `content`: the skill's output (JSON string for structured data, plain text otherwise)
+- Report the returned `artifact_id` to the user so they can retrieve it later.
+- Use `fetch_artifact` when the user asks to retrieve or view a previously stored result.
+
 ### When user asks about OmniForge or what they can do:
 - Explain the platform briefly: agents can be created via chat, auto-load skills, \
 and can be used for any automation task.
-- List the things you can do (create/list agents, list skills, delegate, create skills).
+- List the things you can do (create/list agents, list skills, delegate, author skills, \
+store/fetch artifacts).
 
 ### When user request is vague or ambiguous:
 - Ask one clarifying question to determine their intent before calling any tool.
+- If unclear whether they want to "add an existing skill" vs "author a new skill", \
+ask explicitly: "Do you want to add an existing skill from the library, or create a \
+brand-new custom skill?"
 
 ### When a tool call fails:
 - Read the error message carefully.
@@ -161,6 +214,7 @@ and can be used for any automation task.
         self,
         agent_registry: Optional[AgentRegistry] = None,
         tenant_id: Optional[str] = None,
+        artifact_store: Optional[Any] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the Master Agent with platform management tools.
@@ -169,12 +223,17 @@ and can be used for any automation task.
             agent_registry: Registry for agent discovery and management.
                            Platform tools are only registered when provided.
             tenant_id: Tenant identifier for multi-tenant isolation
+            artifact_store: Optional ArtifactStore for persistent artifact storage.
+                           When provided, store_artifact and fetch_artifact tools
+                           are registered in the tool registry.
             **kwargs: Additional arguments passed to SimpleAutonomousAgent
         """
         # Delegation state — set before tool registration so callback is valid
         self._delegated_agent: Optional[Any] = None
         # Failure context from the last delegation — injected into the next ReAct turn
         self._last_delegation_error: Optional[str] = None
+        # Success context from the last delegation — injected into the next ReAct turn
+        self._last_delegation_success: Optional[str] = None
         # MCP lazy-init state
         self._mcp_initialized: bool = False
         self._mcp_manager: Optional[Any] = None
@@ -198,12 +257,15 @@ and can be used for any automation task.
                 agent_registry,
                 tenant_id,
                 on_delegate=self._set_delegated_agent,
-                local_agents={
-                    self._skill_creation_agent.identity.id: self._skill_creation_agent
-                },
+                local_agents={self._skill_creation_agent.identity.id: self._skill_creation_agent},
             )
         else:
             self._skill_creation_agent = None
+
+        if artifact_store is not None:
+            from omniforge.tools.builtin.artifact import register_artifact_tools
+
+            register_artifact_tools(platform_registry, artifact_store)
 
         # Use the env-configured default model instead of the hardcoded fallback
         llm_config = load_config_from_env()
@@ -218,6 +280,40 @@ and can be used for any automation task.
 
         # Expose registry for MasterResponseGenerator compatibility
         self._agent_registry = agent_registry
+
+    async def _wants_to_return_to_master(self, user_message: str) -> bool:
+        """Determine if the user wants to return to the master agent.
+
+        Uses a two-stage approach:
+        1. Fast path: exact keyword match (zero latency)
+        2. LLM fallback: classifies natural-language intent when no keyword matches
+
+        Args:
+            user_message: The raw user message text
+
+        Returns:
+            True if the user wants to return to the master agent, False otherwise
+        """
+        # Fast path — unambiguous keywords
+        if user_message.lower().strip() in _CANCEL_WORDS:
+            return True
+
+        # LLM fallback — handle natural language like "take me back", "I'm done here", etc.
+        try:
+            import litellm
+
+            prompt = _RETURN_CLASSIFICATION_PROMPT.format(message=user_message)
+            response = await litellm.acompletion(
+                model=self._model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=5,
+                temperature=0.0,
+            )
+            answer = response.choices[0].message.content.strip().upper()
+            return answer.startswith("YES")
+        except Exception as exc:
+            logger.debug("Return-to-master classification failed, forwarding to sub-agent: %s", exc)
+            return False
 
     def _set_delegated_agent(self, agent: Any) -> None:
         """Callback invoked by DelegateToAgentTool to set the active sub-agent.
@@ -241,9 +337,7 @@ and can be used for any automation task.
 
             self._mcp_manager = await setup_mcp_tools(self._tool_registry)
             if self._mcp_manager:
-                logger.info(
-                    "MCP servers connected: %s", self._mcp_manager.connected_servers
-                )
+                logger.info("MCP servers connected: %s", self._mcp_manager.connected_servers)
         except Exception as exc:
             logger.warning("MCP initialization failed (continuing without MCP): %s", exc)
 
@@ -264,7 +358,7 @@ and can be used for any automation task.
         user_message = get_latest_user_message(task)
 
         # ── Handle cancellation of active delegation ──────────────────────
-        if self._delegated_agent is not None and user_message.lower().strip() in _CANCEL_WORDS:
+        if self._delegated_agent is not None and await self._wants_to_return_to_master(user_message):
             self._delegated_agent = None
             now = datetime.utcnow()
             yield TaskStatusEvent(task_id=task.id, timestamp=now, state=TaskState.WORKING)
@@ -283,54 +377,7 @@ and can be used for any automation task.
 
         # ── Forward to delegated agent ────────────────────────────────────
         if self._delegated_agent is not None:
-            delegated_id = (
-                self._delegated_agent.identity.id
-                if hasattr(self._delegated_agent, "identity")
-                else "agent"
-            )
-            now = datetime.utcnow()
-            yield TaskStatusEvent(
-                task_id=task.id,
-                timestamp=now,
-                state=TaskState.WORKING,
-                message=f"Delegating to '{delegated_id}'...",
-            )
-            subtask = self._make_subtask(task)
-            last_error_message: Optional[str] = None
-            async for event in self._delegated_agent.process_task(subtask):
-                # Remap task_id to parent task so caller sees consistent IDs
-                if hasattr(event, "task_id"):
-                    object.__setattr__(event, "task_id", task.id)
-
-                # Capture error reason so we can surface it if the task fails
-                if isinstance(event, TaskErrorEvent):
-                    last_error_message = event.error_message
-
-                # Auto-clear delegation when sub-agent finishes (any terminal state)
-                if isinstance(event, TaskDoneEvent) and event.final_state in (
-                    TaskState.COMPLETED,
-                    TaskState.FAILED,
-                    TaskState.CANCELLED,
-                ):
-                    self._delegated_agent = None
-                    # On non-success, emit a visible error message and persist it
-                    # so the next ReAct turn has full context to course-correct
-                    if event.final_state != TaskState.COMPLETED:
-                        agent_id = subtask.agent_id
-                        reason = last_error_message or f"task ended with state: {event.final_state.value}"
-                        error_text = (
-                            f"[Delegation to '{agent_id}' ended with {event.final_state.value}. "
-                            f"Reason: {reason}]"
-                        )
-                        self._last_delegation_error = error_text
-                        now = datetime.utcnow()
-                        yield TaskMessageEvent(
-                            task_id=task.id,
-                            timestamp=now,
-                            message_parts=[TextPart(text=error_text)],
-                            is_partial=False,
-                        )
-
+            async for event in self._handle_delegation(task):
                 yield event
             return
 
@@ -342,14 +389,123 @@ and can be used for any automation task.
         if task.trace_id is None:
             task = task.model_copy(update={"trace_id": task.id})
 
-        # Inject prior delegation failure into the task history so the LLM
-        # can reason about what went wrong and course-correct
+        # Inject prior delegation outcome into the task history so the LLM
+        # can reason about what happened and course-correct or acknowledge
+        if self._last_delegation_success is not None:
+            success_context = self._last_delegation_success
+            self._last_delegation_success = None
+            task = self._inject_context_message(task, success_context)
+
         if self._last_delegation_error is not None:
             error_context = self._last_delegation_error
             self._last_delegation_error = None
             task = self._inject_context_message(task, error_context)
 
+        # Track whether delegate_to_agent was called during this ReAct turn
+        delegation_set_during_react = False
         async for event in super().process_task(task):
+            # When delegation was set mid-loop, suppress the master's own COMPLETED
+            # event — the subagent will emit its own terminal event below
+            if (
+                self._delegated_agent is not None
+                and isinstance(event, TaskDoneEvent)
+                and event.final_state == TaskState.COMPLETED
+            ):
+                delegation_set_during_react = True
+                continue
+            yield event
+
+        # If delegation was triggered during this turn, immediately run the
+        # subagent with the SAME user message so the original request is forwarded
+        if delegation_set_during_react and self._delegated_agent is not None:
+            async for event in self._handle_delegation(task):
+                yield event
+
+    async def _handle_delegation(self, task: Task) -> AsyncIterator[TaskEvent]:
+        """Run the currently delegated sub-agent for one task turn.
+
+        Remaps task IDs, captures errors, stores outcome context for the next
+        ReAct turn, and auto-clears _delegated_agent on any terminal state.
+
+        Args:
+            task: The parent task (used for task_id remapping and subtask creation)
+
+        Yields:
+            TaskEvent objects from the delegated agent
+        """
+        delegated_id = (
+            self._delegated_agent.identity.id
+            if hasattr(self._delegated_agent, "identity")
+            else "agent"
+        )
+        now = datetime.utcnow()
+        yield TaskStatusEvent(
+            task_id=task.id,
+            timestamp=now,
+            state=TaskState.WORKING,
+            message=f"Delegating to '{delegated_id}'...",
+        )
+        subtask = self._make_subtask(task)
+        last_error_message: Optional[str] = None
+        last_agent_message: Optional[str] = None  # captures subagent's final response text
+        async for event in self._delegated_agent.process_task(subtask):
+            # Remap task_id so caller sees consistent IDs
+            if hasattr(event, "task_id"):
+                event = event.model_copy(update={"task_id": task.id})
+
+            # Capture the subagent's last complete (non-partial) message text
+            if isinstance(event, TaskMessageEvent) and not event.is_partial:
+                parts_text = " ".join(
+                    p.text for p in event.message_parts if hasattr(p, "text") and p.text
+                ).strip()
+                if parts_text:
+                    last_agent_message = parts_text
+
+            # Capture error reason so we can surface it if the task fails
+            if isinstance(event, TaskErrorEvent):
+                last_error_message = event.error_message
+
+            # Auto-clear delegation on any terminal state and store outcome context
+            if isinstance(event, TaskDoneEvent) and event.final_state in (
+                TaskState.COMPLETED,
+                TaskState.FAILED,
+                TaskState.CANCELLED,
+            ):
+                self._delegated_agent = None
+                if event.final_state == TaskState.COMPLETED:
+                    # Inject success context including the subagent's actual result
+                    result_summary = (
+                        f' The agent\'s final response was: "{last_agent_message}"'
+                        if last_agent_message
+                        else ""
+                    )
+                    self._last_delegation_success = (
+                        f"[Delegation to '{delegated_id}' completed successfully.{result_summary} "
+                        "The user is now back with you (Master Agent). "
+                        "Acknowledge what was done and ask what they'd like to do next.]"
+                    )
+                else:
+                    agent_id = subtask.agent_id
+                    reason = (
+                        last_error_message or f"task ended with state: {event.final_state.value}"
+                    )
+                    user_error_text = (
+                        f"I wasn't able to complete that with '{delegated_id}'. "
+                        f"{reason}. What would you like to do instead?"
+                    )
+                    self._last_delegation_error = (
+                        f"[Delegation to '{delegated_id}' ended with "
+                        f"{event.final_state.value}. Reason: {reason}. "
+                        "Tell the user what failed and ask what to do next.]"
+                    )
+                    now = datetime.utcnow()
+                    yield TaskMessageEvent(
+                        task_id=task.id,
+                        timestamp=now,
+                        message_parts=[TextPart(text=user_error_text)],
+                        is_partial=False,
+                    )
+
             yield event
 
     def _inject_context_message(self, task: Task, context_text: str) -> Task:
@@ -392,22 +548,31 @@ and can be used for any automation task.
             A new Task with parent_task_id and conversation_id set
         """
         now = datetime.utcnow()
-        user_message = get_latest_user_message(parent_task)
         agent_id = (
-            self._delegated_agent.identity.id
-            if self._delegated_agent is not None
-            else "unknown"
+            self._delegated_agent.identity.id if self._delegated_agent is not None else "unknown"
         )
         # Include up to 5 prior messages for context (all except the last user message)
         prior_messages = list(parent_task.messages[:-1])[-5:]
-        messages = prior_messages + [
-            TaskMessage(
+        # Preserve the full last user message (all parts: text, images, files)
+        last_user_msg = next(
+            (msg for msg in reversed(parent_task.messages) if msg.role == "user"),
+            None,
+        )
+        if last_user_msg is not None:
+            forwarded_msg = TaskMessage(
                 id=str(uuid4()),
                 role="user",
-                parts=[TextPart(text=user_message)],
+                parts=last_user_msg.parts,
                 created_at=now,
             )
-        ]
+        else:
+            forwarded_msg = TaskMessage(
+                id=str(uuid4()),
+                role="user",
+                parts=[TextPart(text="")],
+                created_at=now,
+            )
+        messages = prior_messages + [forwarded_msg]
         return Task(
             id=str(uuid4()),
             agent_id=agent_id,

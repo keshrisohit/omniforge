@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, AsyncIterator, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from omniforge.tools.types import ToolType, VisibilityLevel
 
@@ -162,6 +162,8 @@ class ToolDefinition(BaseModel):
 class ToolCallContext(BaseModel):
     """Execution context for a tool call."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     correlation_id: str = Field(description="Unique ID to correlate call and result")
     task_id: str = Field(description="ID of the task this call is part of")
     agent_id: str = Field(description="ID of the agent making the call")
@@ -181,6 +183,14 @@ class ToolCallContext(BaseModel):
     )
     max_cost_usd: Optional[float] = Field(
         default=None, ge=0.0, description="Maximum cost in USD allowed for this call"
+    )
+    # asyncio.Queue is not a Pydantic-compatible type so we use Any here.
+    # Callers must pass an asyncio.Queue[TaskEvent] instance; the field is
+    # excluded from serialization so it never leaks into API responses.
+    event_queue: Optional[Any] = Field(
+        default=None,
+        exclude=True,
+        description="asyncio.Queue[TaskEvent] for forwarding events upstream (internal use)",
     )
 
 

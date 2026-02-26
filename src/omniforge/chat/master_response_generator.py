@@ -10,6 +10,9 @@ from datetime import datetime
 from typing import AsyncIterator, Optional
 from uuid import uuid4
 
+from omniforge.agents.cot.chain import StepType
+from omniforge.agents.cot.events import ReasoningStepEvent
+from omniforge.agents.events import TaskErrorEvent, TaskStatusEvent
 from omniforge.agents.master_agent import MasterAgent
 from omniforge.agents.models import TextPart
 from omniforge.agents.registry import AgentRegistry
@@ -100,10 +103,33 @@ class MasterResponseGenerator:
         agent = self._get_or_create_session_agent(session_id)
 
         async for event in agent.process_task(task):
-            if hasattr(event, "message_parts"):
+            # Reasoning steps: thought process, tool calls, tool results
+            if isinstance(event, ReasoningStepEvent):
+                step = event.step
+                if step.type == StepType.THINKING and step.thinking:
+                    yield f"\n[Thought] {step.thinking.content}\n"
+                elif step.type == StepType.TOOL_CALL and step.tool_call:
+                    tc = step.tool_call
+                    params = ", ".join(f"{k}={v!r}" for k, v in tc.parameters.items())
+                    yield f"\n[Tool] {tc.tool_name}({params})\n"
+                elif step.type == StepType.TOOL_RESULT and step.tool_result:
+                    tr = step.tool_result
+                    status = "ok" if tr.success else f"error: {tr.error}"
+                    yield f"[Result] {status}\n"
+
+            # Status transitions (only when there's a human-readable message)
+            elif isinstance(event, TaskStatusEvent) and event.message:
+                yield f"\n[{event.message}]\n"
+
+            # Final answer text
+            elif hasattr(event, "message_parts"):
                 for part in event.message_parts:
                     if hasattr(part, "text"):
                         yield part.text
+
+            # Errors
+            elif isinstance(event, TaskErrorEvent):
+                yield f"\n[Error] {event.error_message}\n"
 
     def count_tokens(self, text: str) -> int:
         """Count tokens in the given text.

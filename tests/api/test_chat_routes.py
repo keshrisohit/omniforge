@@ -24,18 +24,17 @@ class TestChatEndpoint:
         assert response.headers["cache-control"] == "no-cache"
         assert response.headers["connection"] == "keep-alive"
 
-    def test_chat_endpoint_streams_chunk_and_done_events(self, client: TestClient) -> None:
-        """Chat endpoint should stream chunk events followed by done event."""
+    def test_chat_endpoint_streams_agent_events(self, client: TestClient) -> None:
+        """Chat endpoint should stream agent events followed by a done event."""
         response = client.post("/api/v1/chat", json={"message": "Hello"})
 
         content = response.text
-        assert "event: chunk" in content
+        # New format: full agent event stream (reasoning_step, message, done, ...)
         assert "event: done" in content
-        assert "conversation_id" in content
-        assert "usage" in content
+        assert "final_state" in content
 
     def test_chat_endpoint_with_conversation_id(self, client: TestClient) -> None:
-        """Chat endpoint should accept and use provided conversation_id."""
+        """Chat endpoint should accept a provided conversation_id and return 200."""
         conversation_id = "550e8400-e29b-41d4-a716-446655440000"
 
         response = client.post(
@@ -44,7 +43,6 @@ class TestChatEndpoint:
         )
 
         assert response.status_code == 200
-        assert conversation_id in response.text
 
     def test_chat_endpoint_with_empty_message_fails_validation(self, client: TestClient) -> None:
         """Chat endpoint should reject empty messages."""

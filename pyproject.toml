@@ -39,6 +39,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-timeout>=2.2.0",
+    "pytest-xdist>=3.0.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
@@ -61,7 +62,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --cov=omniforge --cov-report=term-missing"
+addopts = "-v --cov=omniforge --cov-report=term-missing -n auto --dist=worksteal"
 asyncio_mode = "auto"
 
 [tool.black]

@@ -399,55 +399,6 @@ class TestToolExecutor:
         )
 
     @pytest.mark.asyncio
-    async def test_execute_with_events_yields_steps(
-        self, registry: ToolRegistry, context: ToolCallContext, chain: ReasoningChain
-    ) -> None:
-        """Should yield reasoning steps as events during execution."""
-        # Arrange
-        tool = MockTool()
-        registry.register(tool)
-        executor = ToolExecutor(registry)
-        arguments = {"input": "test"}
-
-        # Act
-        steps = []
-        async for step in executor.execute_with_events("mock_tool", arguments, context, chain):
-            steps.append(step)
-
-        # Assert
-        assert len(steps) == 2
-        assert steps[0].type == StepType.TOOL_CALL
-        assert steps[1].type == StepType.TOOL_RESULT
-
-        # Verify steps are also added to chain
-        assert len(chain.steps) == 2
-
-    @pytest.mark.asyncio
-    async def test_execute_with_events_correlation_ids(
-        self, registry: ToolRegistry, context: ToolCallContext, chain: ReasoningChain
-    ) -> None:
-        """Should maintain correlation IDs in event streaming."""
-        # Arrange
-        tool = MockTool()
-        registry.register(tool)
-        executor = ToolExecutor(registry)
-        arguments = {"input": "test"}
-
-        # Act
-        steps = []
-        async for step in executor.execute_with_events("mock_tool", arguments, context, chain):
-            steps.append(step)
-
-        # Assert
-        tool_call_step = steps[0]
-        tool_result_step = steps[1]
-
-        assert tool_call_step.tool_call is not None
-        assert tool_result_step.tool_result is not None
-        assert tool_call_step.tool_call.correlation_id == context.correlation_id
-        assert tool_result_step.tool_result.correlation_id == context.correlation_id
-
-    @pytest.mark.asyncio
     async def test_execute_non_retryable_error(
         self, registry: ToolRegistry, context: ToolCallContext, chain: ReasoningChain
     ) -> None:

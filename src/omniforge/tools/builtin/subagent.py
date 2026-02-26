@@ -182,7 +182,9 @@ class SubAgentTool(BaseTool):
             # Process task with timeout
             timeout_seconds = self._timeout_ms / 1000
             result = await asyncio.wait_for(
-                self._process_sub_agent_task(agent, task, updated_context),
+                self._process_sub_agent_task(
+                    agent, task, updated_context, event_queue=context.event_queue
+                ),
                 timeout=timeout_seconds,
             )
 
@@ -223,7 +225,7 @@ class SubAgentTool(BaseTool):
             )
 
     async def _process_sub_agent_task(
-        self, agent: Any, task: Task, context: dict[str, Any]
+        self, agent: Any, task: Task, context: dict[str, Any], event_queue: Any = None
     ) -> dict[str, Any]:
         """Process task with sub-agent and collect results.
 
@@ -231,6 +233,7 @@ class SubAgentTool(BaseTool):
             agent: The sub-agent to process the task
             task: The task to process
             context: Context data passed to sub-agent
+            event_queue: Optional asyncio.Queue to forward TaskMessageEvents upstream
 
         Returns:
             Dictionary with sub-agent results
@@ -246,6 +249,13 @@ class SubAgentTool(BaseTool):
 
         # Process task events from agent
         async for event in agent.process_task(task):
+            # Forward all non-terminal events upstream so the parent's consumer
+            # (e.g. SSE endpoint) gets real-time visibility into the sub-agent.
+            # Terminal events (Done/Error) are internal coordination signals and
+            # must not be forwarded — they would confuse the parent's event loop.
+            if event_queue is not None and not isinstance(event, (TaskDoneEvent, TaskErrorEvent)):
+                event_queue.put_nowait(event)
+
             if isinstance(event, TaskMessageEvent):
                 # Collect all message parts — text, data, and file references
                 for part in event.message_parts:
@@ -301,9 +311,8 @@ class SubAgentTool(BaseTool):
         # Raise on failure so the ReAct loop treats it as an error observation
         if final_state == TaskState.FAILED:
             if error_info:
-                error_detail = f"[{error_info['code']}] {error_info['message']}"
+                raise Exception(f"[{error_info['code']}] {error_info['message']}")
             else:
-                error_detail = "no error details provided"
-            raise Exception(f"Agent '{task.agent_id}' failed: {error_detail}")
+                raise Exception("sub-agent failed with no error details")
 
         return result

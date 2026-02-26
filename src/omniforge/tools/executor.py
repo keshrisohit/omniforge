@@ -9,7 +9,7 @@ import asyncio
 import logging
 import re
 import time
-from typing import Any, AsyncIterator, Optional, Protocol
+from typing import Any, Optional, Protocol
 
 from omniforge.agents.cot.chain import (
     ReasoningStep,
@@ -82,6 +82,7 @@ class ToolExecutor:
         registry: ToolRegistry,
         rate_limiter: Optional[RateLimiter] = None,
         cost_tracker: Optional[CostTracker] = None,
+        backend: Optional[Any] = None,
     ) -> None:
         """Initialize the tool executor.
 
@@ -89,10 +90,14 @@ class ToolExecutor:
             registry: Tool registry for retrieving tools
             rate_limiter: Optional rate limiter for request throttling
             cost_tracker: Optional cost tracker for monitoring expenses
+            backend: Execution backend (defaults to InProcessBackend)
         """
+        from omniforge.execution import InProcessBackend
+
         self._registry = registry
         self._rate_limiter = rate_limiter
         self._cost_tracker = cost_tracker
+        self._backend = backend or InProcessBackend()
         self._skill_stack: list[Skill] = []
         self._skill_contexts: dict[str, SkillContext] = {}
 
@@ -266,8 +271,16 @@ class ToolExecutor:
         )
         chain.add_step(tool_call_step)
 
-        # Execute tool with retries
-        result = await self._execute_with_retries(tool, arguments, context)
+        # Execute tool with retries via backend
+        async def _run() -> ToolResult:
+            return await self._execute_with_retries(tool, arguments, context)
+
+        result = await self._backend.run_activity(
+            _run,
+            activity_name=tool_name,
+            timeout_ms=tool.definition.timeout_ms,
+            max_retries=tool.definition.retry_config.max_retries,
+        )
 
         # Track cost if tracker is configured
         if self._cost_tracker:
@@ -460,103 +473,3 @@ class ToolExecutor:
 
         return None
 
-    async def execute_with_events(
-        self,
-        tool_name: str,
-        arguments: dict[str, Any],
-        context: ToolCallContext,
-        chain: ChainRecorder,
-    ) -> AsyncIterator[ReasoningStep]:
-        """Execute a tool and yield reasoning steps as events.
-
-        This async generator yields steps as they are created, making it useful
-        for streaming execution events to clients via SSE or WebSocket.
-
-        Args:
-            tool_name: Name of the tool to execute
-            arguments: Arguments to pass to the tool
-            context: Execution context with task/agent/tenant info
-            chain: Chain recorder to record steps in
-
-        Yields:
-            ReasoningStep events as execution progresses
-
-        Raises:
-            ToolNotFoundError: If tool is not found in registry
-            ToolValidationError: If argument validation fails
-            RateLimitExceededError: If rate limit is exceeded
-            ToolTimeoutError: If execution exceeds timeout
-            ToolExecutionError: If execution fails after retries
-        """
-        # Retrieve tool from registry
-        tool = self._registry.get(tool_name)
-
-        # Validate arguments
-        tool.validate_arguments(arguments)
-
-        # Check skill restrictions if active skill exists
-        if self.active_skill:
-            skill_context = self._skill_contexts[self.active_skill.metadata.name]
-            try:
-                # Check if tool is allowed
-                skill_context.check_tool_allowed(tool_name)
-                # Check tool arguments
-                skill_context.check_tool_arguments(tool_name, arguments)
-            except SkillError as e:
-                # Log restriction violation
-                logger.warning(
-                    f"Skill restriction blocked tool execution: {e.message}",
-                    extra={
-                        "skill_name": self.active_skill.metadata.name,
-                        "tool_name": tool_name,
-                        "error_code": e.error_code,
-                    },
-                )
-                # Note: For execute_with_events, we raise the error
-                # since it's an async generator and can't easily return early
-                raise
-
-        # Check rate limits if limiter is configured
-        if self._rate_limiter and context.tenant_id:
-            await self._rate_limiter.check_limit(context.tenant_id, tool_name)
-
-        # Create tool_call step and add to chain
-        tool_call_step = ReasoningStep(
-            step_number=0,  # Will be updated by chain.add_step
-            type=StepType.TOOL_CALL,
-            tool_call=ToolCallInfo(
-                tool_name=tool_name,
-                tool_type=tool.definition.type,
-                parameters=arguments,
-                correlation_id=context.correlation_id,
-            ),
-            visibility=VisibilityConfig(level=tool.definition.visibility.default_level),
-        )
-        chain.add_step(tool_call_step)
-        yield tool_call_step
-
-        # Execute tool with retries
-        result = await self._execute_with_retries(tool, arguments, context)
-
-        # Track cost if tracker is configured
-        if self._cost_tracker:
-            await self._cost_tracker.track_cost(
-                context.task_id, tool_name, result.cost_usd, result.tokens_used
-            )
-
-        # Create tool_result step with matching correlation_id
-        tool_result_step = ReasoningStep(
-            step_number=0,  # Will be updated by chain.add_step
-            type=StepType.TOOL_RESULT,
-            tool_result=ToolResultInfo(
-                correlation_id=context.correlation_id,
-                success=result.success,
-                result=result.result,
-                error=result.error,
-            ),
-            tokens_used=result.tokens_used,
-            cost=result.cost_usd,
-            visibility=VisibilityConfig(level=tool.definition.visibility.default_level),
-        )
-        chain.add_step(tool_result_step)
-        yield tool_result_step

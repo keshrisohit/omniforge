@@ -81,7 +81,6 @@ async def chat() -> None:
         print("Agent: ", end="", flush=True)
         response_chunks: list[str] = []
         try:
-
             async for chunk in generator.generate_stream(
                 user_input,
                 conversation_history=history[:-1],  # prior turns only
